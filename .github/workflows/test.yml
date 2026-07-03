@@ -11,7 +11,7 @@ on:
       python-version:
         description: "Python version used on all OSes."
         type: string
-        default: "3.12"
+        default: "3.10"
       package-import-name:
         description: "Importable package name, e.g. brainmaze_utils (used only to print the installed version)."
         type: string

@@ -22,7 +22,7 @@ on:
         required: true
       python-version:
         type: string
-        default: "3.12"
+        default: "3.10"
       pypi-auth:
         description: "PyPI auth mode: trusted (OIDC) or token."
         type: string
