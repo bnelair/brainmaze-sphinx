@@ -14,6 +14,7 @@ Runs the package's own `pytest` suite on one job per OS (Ubuntu, macOS, Windows)
 
 Consume it from a package repo (`.github/workflows/ci.yml`):
 
+
 ```yaml
 name: CI
 on: [push, pull_request]
@@ -68,6 +69,39 @@ pick `patch` / `minor` / `major`.
   once: repo `bnelair/<package>`, workflow `release.yml`.
 - `pypi-auth: token` uses the `PYPI_Token_General` secret (passed through via
   `secrets: inherit`) with the standard PyPI upload action.
+
+### `docs.yml`
+
+Builds the package's Sphinx docs and publishes them to the repo's `gh-pages`
+branch, hosting two versions on one GitHub Pages site:
+
+- push to `main` -> site **root** (released docs, e.g. `bnelair.github.io/brainmaze-eeg/`)
+- push to `dev` -> **`/dev/`** subpath (live preview, e.g. `bnelair.github.io/brainmaze-eeg/dev/`)
+
+Consume it from a package repo (`.github/workflows/docs.yml`):
+
+```yaml
+name: Docs
+on:
+  push:
+    branches: [main, dev]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  docs:
+    uses: bnelair/brainmaze-sphinx/.github/workflows/docs.yml@main
+```
+
+Requirements on the consuming package:
+- Sphinx sources at `docs_src/source` (override via the `source-dir` input),
+- optional `docs_src/requirements.txt` (installed if present); the package itself
+  is installed with `pip install -e .` so autodoc can import it,
+- **one-time repo setting:** Settings -> Pages -> Source = *Deploy from a branch* ->
+  `gh-pages` / `/ (root)`. The `gh-pages` branch is created by the first run.
+
+Note: `keep_files: true` keeps the sibling version (root vs `/dev`) intact across
+deploys; a page removed from the sources lingers until overwritten.
 
 ## Versioning contract
 

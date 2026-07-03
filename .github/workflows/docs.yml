@@ -1,0 +1,74 @@
+name: Docs (reusable)
+
+# Reusable documentation workflow shared across the BrainMaze package family.
+#
+# Builds the package's Sphinx docs and publishes them to the repo's `gh-pages`
+# branch so a single GitHub Pages site hosts two versions:
+#   - push to main -> site root      (released docs)
+#   - push to dev  -> /dev/ subpath  (live preview)
+#
+# The consuming repo must set Pages source to "Deploy from a branch: gh-pages /".
+#
+# Callers reference it as:
+#   uses: bnelair/brainmaze-sphinx/.github/workflows/docs.yml@main
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        type: string
+        default: "3.12"
+      source-dir:
+        description: "Sphinx source directory."
+        type: string
+        default: "docs_src/source"
+      requirements:
+        description: "Extra pip requirements file for the docs build (installed if present)."
+        type: string
+        default: "docs_src/requirements.txt"
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # push to the gh-pages branch
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Install package and docs dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f "${{ inputs.requirements }}" ]; then
+            pip install -r "${{ inputs.requirements }}"
+          fi
+          pip install -e .
+
+      - name: Build documentation
+        run: |
+          sphinx-build -b html "${{ inputs.source-dir }}" ./_site
+          touch ./_site/.nojekyll
+
+      - name: Resolve deploy destination (main -> root, dev -> /dev)
+        id: dest
+        run: |
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "dir=" >> "$GITHUB_OUTPUT"
+          else
+            echo "dir=dev" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./_site
+          destination_dir: ${{ steps.dest.outputs.dir }}
+          keep_files: true       # keep the sibling version (root vs /dev) intact
