@@ -45,7 +45,7 @@ jobs:
 
       - name: Install package and docs dependencies
         run: |
-          python -m pip install --upgrade pip
+          python -m pip install --upgrade pip setuptools wheel
           if [ -f "${{ inputs.requirements }}" ]; then
             pip install -r "${{ inputs.requirements }}"
           fi
