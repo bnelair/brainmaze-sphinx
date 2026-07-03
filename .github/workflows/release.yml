@@ -27,6 +27,10 @@ on:
         description: "PyPI auth mode: trusted (OIDC) or token."
         type: string
         default: "trusted"
+    secrets:
+      PYPI_Token_General:
+        description: "PyPI API token; only needed when pypi-auth is 'token'."
+        required: false
 
 jobs:
   # Reuse the shared test workflow so we never release a red build.

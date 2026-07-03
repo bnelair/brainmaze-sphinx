@@ -53,7 +53,9 @@ jobs:
     with:
       bump: ${{ inputs.bump }}
       pypi-auth: trusted          # or: token
-    secrets: inherit              # needed for the API-token publish path
+    secrets:
+      # Only forwarded secret; empty/unused under trusted publishing.
+      PYPI_Token_General: ${{ secrets.PYPI_Token_General }}
     permissions:
       contents: write
       id-token: write
@@ -67,8 +69,9 @@ pick `patch` / `minor` / `major`.
 - `pypi-auth: trusted` (default) uses [PyPI Trusted Publishing](https://docs.pypi.org/trusted-publishers/)
   via OIDC — no stored secret. Configure a trusted publisher on each PyPI project
   once: repo `bnelair/<package>`, workflow `release.yml`.
-- `pypi-auth: token` uses the `PYPI_Token_General` secret (passed through via
-  `secrets: inherit`) with the standard PyPI upload action.
+- `pypi-auth: token` uses the `PYPI_Token_General` secret (forwarded explicitly via
+  the `secrets:` mapping — only that one secret, not `secrets: inherit`) with the
+  standard PyPI upload action.
 
 ### `docs.yml`
 
