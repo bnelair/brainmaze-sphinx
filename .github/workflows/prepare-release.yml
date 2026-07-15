@@ -71,19 +71,22 @@ jobs:
           branch="release/bump-${v}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Never rewrite an existing bump branch: it could discard human commits added
+          # during review. If one already exists, stop and ask the maintainer to clear it.
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            echo "::error::Branch ${branch} already exists -- a release for v${v} may already be open."
+            echo "Close/delete the existing PR and branch, then re-run Prepare release."
+            exit 1
+          fi
           git checkout -b "$branch"
           git add pyproject.toml
           git commit -m "Release v${v}"
-          git push --force-with-lease origin "$branch"
-          if gh pr view "$branch" --json number >/dev/null 2>&1; then
-            echo "A PR for $branch already exists; updated the branch."
-          else
-            gh pr create \
-              --base main --head "$branch" \
-              --title "Release v${v}" \
-              --body "Automated version bump to \`${v}\`.
+          git push origin "$branch"
+          gh pr create \
+            --base main --head "$branch" \
+            --title "Release v${v}" \
+            --body "Automated version bump to \`${v}\`.
 
           Merging this PR to \`main\` publishes the release: \`release.yml\` tags \`v${v}\`, builds, and publishes to PyPI + GitHub Releases.
 
           Do not edit \`[project].version\` in any other PR -- the version is owned by this release flow on \`main\` (see the *How to contribute* section of the README)."
-          fi

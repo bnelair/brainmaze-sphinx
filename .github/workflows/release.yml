@@ -21,6 +21,11 @@ name: Release (reusable)
 on:
   workflow_call:
     inputs:
+      bump:
+        description: "Deprecated and ignored -- version is bumped via the Prepare release PR now. Kept optional so pre-existing callers don't fail."
+        type: string
+        required: false
+        default: ""
       python-version:
         type: string
         default: "3.10"
@@ -55,12 +60,22 @@ jobs:
           set -euo pipefail
           version="$(grep -m1 -E '^version[[:space:]]*=' pyproject.toml | sed -E 's/.*"([^"]+)".*/\1/')"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
-          if git ls-remote --exit-code --tags origin "refs/tags/v${version}" >/dev/null 2>&1; then
+          # git ls-remote --exit-code: 0 = ref found, 2 = no matching ref, other = real error.
+          # Distinguish them so a transient network/auth failure never looks like "no tag"
+          # and triggers an accidental release.
+          set +e
+          git ls-remote --exit-code --tags origin "refs/tags/v${version}" >/dev/null 2>&1
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
             echo "release=false" >> "$GITHUB_OUTPUT"
             echo "Tag v${version} already exists -- nothing to release."
-          else
+          elif [ "$rc" -eq 2 ]; then
             echo "release=true" >> "$GITHUB_OUTPUT"
             echo "Version v${version} has no tag -- will release."
+          else
+            echo "::error::git ls-remote failed (exit ${rc}); aborting to avoid an accidental release."
+            exit "$rc"
           fi
 
   test:
