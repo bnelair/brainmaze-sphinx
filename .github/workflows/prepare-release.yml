@@ -1,0 +1,89 @@
+name: Prepare release (reusable)
+
+# Reusable "prepare release" workflow shared across the BrainMaze package family.
+#
+# It does NOT push to a protected branch. Instead it opens a small pull request that
+# bumps [project].version in pyproject.toml. A code owner reviews and merges that PR
+# through the normal protected flow; merging it to main triggers release.yml, which
+# tags + builds + publishes. This keeps branch protection fully intact.
+#
+# The bump branch is created off main (never off dev), so the version line is only ever
+# changed on main by this automation -- feature/dev branches never touch it. That keeps
+# every dev -> main merge one-sided on that line and therefore conflict-free, even under
+# the required squash-merge strategy.
+#
+# Callers reference it as:
+#   uses: bnelair/brainmaze-sphinx/.github/workflows/prepare-release.yml@main
+
+on:
+  workflow_call:
+    inputs:
+      bump:
+        description: "Semver part to bump: patch | minor | major."
+        type: string
+        required: true
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # push the release/bump-* branch
+      pull-requests: write    # open the bump PR
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Compute bumped version
+        id: bump
+        shell: python
+        run: |
+          import os, re, pathlib
+          bump = "${{ inputs.bump }}"
+          if bump not in {"patch", "minor", "major"}:
+              raise SystemExit(f"Invalid bump '{bump}' (expected patch|minor|major)")
+          path = pathlib.Path("pyproject.toml")
+          text = path.read_text()
+          m = re.search(r'(?m)^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"', text)
+          if not m:
+              raise SystemExit('No static [project].version = "X.Y.Z" found in pyproject.toml')
+          major, minor, patch = (int(x) for x in m.groups())
+          if bump == "major":
+              major, minor, patch = major + 1, 0, 0
+          elif bump == "minor":
+              minor, patch = minor + 1, 0
+          else:
+              patch += 1
+          new = f"{major}.{minor}.{patch}"
+          path.write_text(text[:m.start()] + f'version = "{new}"' + text[m.end():])
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"version={new}\n")
+          print(f"Bumped version -> {new}")
+
+      - name: Open bump pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          v="${{ steps.bump.outputs.version }}"
+          branch="release/bump-${v}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add pyproject.toml
+          git commit -m "Release v${v}"
+          git push --force-with-lease origin "$branch"
+          if gh pr view "$branch" --json number >/dev/null 2>&1; then
+            echo "A PR for $branch already exists; updated the branch."
+          else
+            gh pr create \
+              --base main --head "$branch" \
+              --title "Release v${v}" \
+              --body "Automated version bump to \`${v}\`.
+
+          Merging this PR to \`main\` publishes the release: \`release.yml\` tags \`v${v}\`, builds, and publishes to PyPI + GitHub Releases.
+
+          Do not edit \`[project].version\` in any other PR -- the version is owned by this release flow on \`main\` (see the *How to contribute* section of the README)."
+          fi

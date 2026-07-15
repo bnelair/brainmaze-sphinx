@@ -2,13 +2,18 @@ name: Release (reusable)
 
 # Reusable release workflow shared across the BrainMaze package family.
 #
-# pyproject.toml is the single source of truth for the version. This workflow:
+# pyproject.toml is the single source of truth for the version (static [project].version).
+# This workflow NEVER writes to a protected branch. It is triggered by the caller on push
+# to main and only acts when the version on main has no matching tag yet -- i.e. right
+# after a "Release vX.Y.Z" bump PR (see prepare-release.yml) is merged. It then:
 #   1. runs the test suite,
-#   2. bumps [project].version in pyproject.toml (patch/minor/major),
-#   3. commits the bump to main and tags vX.Y.Z,
-#   4. builds the sdist + wheel,
-#   5. publishes to PyPI (Trusted Publishing by default, API token optional),
-#   6. creates a GitHub Release.
+#   2. tags vX.Y.Z (tags are not covered by the branch ruleset),
+#   3. builds the sdist + wheel,
+#   4. publishes to PyPI (Trusted Publishing by default),
+#   5. creates a GitHub Release.
+#
+# Ordinary feature merges (dev -> main) don't change the version, so the tag already
+# exists and this workflow no-ops -- only a version-changing merge releases.
 #
 # Callers reference it as:
 #   uses: bnelair/brainmaze-sphinx/.github/workflows/release.yml@main
@@ -16,10 +21,6 @@ name: Release (reusable)
 on:
   workflow_call:
     inputs:
-      bump:
-        description: "Semver part to bump: patch | minor | major."
-        type: string
-        required: true
       python-version:
         type: string
         default: "3.10"
@@ -32,28 +33,56 @@ on:
         description: "PyPI API token; only needed when pypi-auth is 'token'."
         required: false
 
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
+
 jobs:
-  # Reuse the shared test workflow so we never release a red build.
+  # Only release when the current pyproject version has no tag yet.
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.check.outputs.release }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Decide whether to release
+        id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(grep -m1 -E '^version[[:space:]]*=' pyproject.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/v${version}" >/dev/null 2>&1; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "Tag v${version} already exists -- nothing to release."
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "Version v${version} has no tag -- will release."
+          fi
+
   test:
+    needs: guard
+    if: needs.guard.outputs.release == 'true'
     uses: bnelair/brainmaze-sphinx/.github/workflows/test.yml@main
     with:
       python-version: ${{ inputs.python-version }}
 
   release:
-    needs: test
+    needs: [guard, test]
+    if: needs.guard.outputs.release == 'true'
     runs-on: ubuntu-latest
     permissions:
-      contents: write      # push the version-bump commit + tag
+      contents: write      # push the tag + create the GitHub Release
       id-token: write      # PyPI Trusted Publishing (OIDC)
     steps:
-      - name: Checkout main
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          ref: main
           fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ inputs.python-version }}
 
@@ -62,41 +91,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install build
 
-      - name: Bump version in pyproject.toml
-        id: ver
-        shell: python
+      - name: Tag the release
         run: |
-          import os, re, pathlib
-          bump = "${{ inputs.bump }}"
-          if bump not in {"patch", "minor", "major"}:
-              raise SystemExit(f"Invalid bump '{bump}' (expected patch|minor|major)")
-          path = pathlib.Path("pyproject.toml")
-          text = path.read_text()
-          m = re.search(r'(?m)^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"', text)
-          if not m:
-              raise SystemExit("No static [project].version = \"X.Y.Z\" found in pyproject.toml")
-          major, minor, patch = (int(x) for x in m.groups())
-          if bump == "major":
-              major, minor, patch = major + 1, 0, 0
-          elif bump == "minor":
-              minor, patch = minor + 1, 0
-          else:
-              patch += 1
-          new = f"{major}.{minor}.{patch}"
-          path.write_text(text[:m.start()] + f'version = "{new}"' + text[m.end():])
-          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
-              fh.write(f"version={new}\n")
-          print(f"Bumped version -> {new}")
-
-      - name: Commit and tag
-        run: |
+          set -euo pipefail
+          v="v${{ needs.guard.outputs.version }}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add pyproject.toml
-          git commit -m "Release v${{ steps.ver.outputs.version }}"
-          git tag "v${{ steps.ver.outputs.version }}"
-          git push origin HEAD:main
-          git push origin "v${{ steps.ver.outputs.version }}"
+          git tag "$v"
+          git push origin "$v"          # tag ref -- not covered by the branch ruleset
 
       - name: Build distributions
         run: python -m build
@@ -114,6 +116,6 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "v${{ steps.ver.outputs.version }}"
-          name: "v${{ steps.ver.outputs.version }}"
+          tag_name: "v${{ needs.guard.outputs.version }}"
+          name: "v${{ needs.guard.outputs.version }}"
           generate_release_notes: true
