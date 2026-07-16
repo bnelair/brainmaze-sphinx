@@ -3,17 +3,14 @@ name: Release (reusable)
 # Reusable release workflow shared across the BrainMaze package family.
 #
 # pyproject.toml is the single source of truth for the version (static [project].version).
-# This workflow NEVER writes to a protected branch. It is triggered by the caller on push
-# to main and only acts when the version on main has no matching tag yet -- i.e. right
-# after a "Release vX.Y.Z" bump PR (see prepare-release.yml) is merged. It then:
-#   1. runs the test suite,
-#   2. tags vX.Y.Z (tags are not covered by the branch ruleset),
-#   3. builds the sdist + wheel,
-#   4. publishes to PyPI (Trusted Publishing by default),
-#   5. creates a GitHub Release.
-#
-# Ordinary feature merges (dev -> main) don't change the version, so the tag already
-# exists and this workflow no-ops -- only a version-changing merge releases.
+# This workflow NEVER writes to a protected branch, and it does NOT publish to PyPI itself:
+# PyPI Trusted Publishing does not support publishing from a reusable workflow, so the
+# publish step must run in the caller's own top-level workflow. Here we only:
+#   1. decide whether to release (the version on main has no tag yet),
+#   2. run the test suite,
+#   3. build the sdist + wheel and upload them as the `dist` artifact.
+# The caller then downloads that artifact, publishes to PyPI (Trusted Publishing, matched
+# against the caller repo), and tags + creates the GitHub Release after a successful upload.
 #
 # Callers reference it as:
 #   uses: bnelair/brainmaze-sphinx/.github/workflows/release.yml@main
@@ -22,21 +19,20 @@ on:
   workflow_call:
     inputs:
       bump:
-        description: "Deprecated and ignored -- version is bumped via the Prepare release PR now. Kept optional so pre-existing callers don't fail."
+        description: "Deprecated and ignored -- version is bumped via the Prepare release PR. Kept optional so old callers don't fail."
         type: string
         required: false
         default: ""
       python-version:
         type: string
         default: "3.10"
-      pypi-auth:
-        description: "PyPI auth mode: trusted (OIDC) or token."
-        type: string
-        default: "trusted"
-    secrets:
-      PYPI_Token_General:
-        description: "PyPI API token; only needed when pypi-auth is 'token'."
-        required: false
+    outputs:
+      released:
+        description: "'true' when the current version has no tag yet and a release should be published."
+        value: ${{ jobs.guard.outputs.release }}
+      version:
+        description: "The version read from pyproject.toml."
+        value: ${{ jobs.guard.outputs.version }}
 
 concurrency:
   group: release-${{ github.repository }}
@@ -61,8 +57,7 @@ jobs:
           version="$(grep -m1 -E '^version[[:space:]]*=' pyproject.toml | sed -E 's/.*"([^"]+)".*/\1/')"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           # git ls-remote --exit-code: 0 = ref found, 2 = no matching ref, other = real error.
-          # Distinguish them so a transient network/auth failure never looks like "no tag"
-          # and triggers an accidental release.
+          # Distinguish them so a transient network/auth failure never looks like "no tag".
           set +e
           git ls-remote --exit-code --tags origin "refs/tags/v${version}" >/dev/null 2>&1
           rc=$?
@@ -85,52 +80,24 @@ jobs:
     with:
       python-version: ${{ inputs.python-version }}
 
-  release:
+  build:
     needs: [guard, test]
     if: needs.guard.outputs.release == 'true'
     runs-on: ubuntu-latest
-    permissions:
-      contents: write      # push the tag + create the GitHub Release
-      id-token: write      # PyPI Trusted Publishing (OIDC)
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ inputs.python-version }}
-
-      - name: Install build tooling
-        run: |
-          python -m pip install --upgrade pip
-          pip install build
-
-      - name: Tag the release
-        run: |
-          set -euo pipefail
-          v="v${{ needs.guard.outputs.version }}"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag "$v"
-          git push origin "$v"          # tag ref -- not covered by the branch ruleset
-
       - name: Build distributions
-        run: python -m build
-
-      - name: Publish to PyPI (Trusted Publishing)
-        if: ${{ inputs.pypi-auth == 'trusted' }}
-        uses: pypa/gh-action-pypi-publish@release/v1
-
-      - name: Publish to PyPI (API token)
-        if: ${{ inputs.pypi-auth == 'token' }}
-        uses: pypa/gh-action-pypi-publish@release/v1
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
         with:
-          password: ${{ secrets.PYPI_Token_General }}
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: "v${{ needs.guard.outputs.version }}"
-          name: "v${{ needs.guard.outputs.version }}"
-          generate_release_notes: true
+          name: dist
+          path: dist/
+          if-no-files-found: error
