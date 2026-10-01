@@ -3,7 +3,7 @@ name: Prepare release (reusable)
 # Reusable "prepare release" workflow shared across the BrainMaze package family.
 #
 # It does NOT push to a protected branch. Instead it opens a small pull request that
-# bumps [project].version in pyproject.toml. A code owner reviews and merges that PR
+# bumps [project].version in pyproject.toml. A maintainer reviews and squash-merges that PR
 # through the normal protected flow; merging it to main triggers release.yml, which
 # tags + builds + publishes. This keeps branch protection fully intact.
 #
@@ -39,14 +39,19 @@ jobs:
       - name: Compute bumped version
         id: bump
         shell: python
+        env:
+          BUMP: ${{ inputs.bump }}
         run: |
           import os, re, pathlib
-          bump = "${{ inputs.bump }}"
+          bump = os.environ["BUMP"]
           if bump not in {"patch", "minor", "major"}:
               raise SystemExit(f"Invalid bump '{bump}' (expected patch|minor|major)")
           path = pathlib.Path("pyproject.toml")
           text = path.read_text()
-          m = re.search(r'(?m)^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"', text)
+          # Only the [project] table: from its header to the next table header.
+          table = re.search(r'(?ms)^\[project\][ \t]*$(.*?)(?=^\[|\Z)', text)
+          m = table and re.compile(r'(?m)^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"').search(
+              text, table.start(1), table.end(1))
           if not m:
               raise SystemExit('No static [project].version = "X.Y.Z" found in pyproject.toml')
           major, minor, patch = (int(x) for x in m.groups())
@@ -65,9 +70,10 @@ jobs:
       - name: Open bump pull request
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.bump.outputs.version }}
         run: |
           set -euo pipefail
-          v="${{ steps.bump.outputs.version }}"
+          v="$VERSION"
           branch="release/bump-${v}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
