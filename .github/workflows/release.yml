@@ -26,6 +26,10 @@ on:
       python-version:
         type: string
         default: "3.10"
+      versions:
+        description: "Passed to test.yml (JSON list of python/numpy combinations); empty = python-version only."
+        type: string
+        default: ""
     outputs:
       released:
         description: "'true' when the current version has no tag yet and a release should be published."
@@ -79,6 +83,7 @@ jobs:
     uses: bnelair/brainmaze-sphinx/.github/workflows/test.yml@main
     with:
       python-version: ${{ inputs.python-version }}
+      versions: ${{ inputs.versions }}
 
   build:
     needs: [guard, test]

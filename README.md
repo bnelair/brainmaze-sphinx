@@ -10,10 +10,10 @@ The shared Sphinx documentation theme will be added here in a later phase.
 
 ### `test.yml`
 
-Runs the package's own `pytest` suite on one job per OS (Ubuntu, macOS, Windows).
+Runs the package's own `pytest` suite on Ubuntu, macOS and Windows, for each
+Python/numpy combination in `versions`.
 
 Consume it from a package repo (`.github/workflows/ci.yml`):
-
 
 ```yaml
 name: CI
@@ -23,55 +23,62 @@ jobs:
     uses: bnelair/brainmaze-sphinx/.github/workflows/test.yml@main
     with:
       package-import-name: brainmaze_utils   # optional, only for logging
+      # Family default: oldest supported stack + newest stack.
+      versions: '[{"python": "3.10", "numpy": "<2"}, {"python": "3.12", "numpy": ">=2"}]'
 ```
+
+| input | default | meaning |
+|---|---|---|
+| `versions` | `""` | JSON list of `{"python": "3.x", "numpy": "<pip specifier>"}`. `"numpy": ""` = latest. Empty = one job per OS with `python-version` and latest numpy (old behaviour). |
+| `python-version` | `"3.10"` | Used only when `versions` is empty. |
+| `package-import-name` | `""` | Prints `<pkg>.__version__` after install. |
 
 Requirements on the consuming package:
 - a `pyproject.toml` with a `test` optional-dependency extra that includes `pytest`,
-- an importable test suite discoverable by `python -m pytest`.
+- an importable test suite discoverable by `python -m pytest`,
+- numpy-version support declared in `dependencies` that matches the matrix (every
+  BrainMaze package must work on numpy 1.x **and** 2.x; see the family
+  [compatibility policy](https://github.com/bnelair/brainmaze/blob/main/RELEASING.md#compatibility-policy)).
 
-### `release.yml`
+### Release workflows (`prepare-release.yml` + `release.yml`)
 
-`pyproject.toml` is the **single source of truth** for the version. This workflow
-bumps `[project].version`, commits it to `main`, tags `vX.Y.Z`, builds, publishes to
-PyPI, and creates a GitHub Release.
+The full maintainer guide (one-time setup, step-by-step release, troubleshooting) is in
+[bnelair/brainmaze `RELEASING.md`](https://github.com/bnelair/brainmaze/blob/main/RELEASING.md).
+In short:
 
-Consume it from a package repo (`.github/workflows/release.yml`):
+1. **Prepare release** (manual, `workflow_dispatch`, pick `patch` / `minor` / `major`):
+   the shared `prepare-release.yml` bumps `[project].version` in `pyproject.toml` on a new
+   `release/bump-X.Y.Z` branch cut from `main` and opens a **"Release vX.Y.Z"** PR as
+   `github-actions[bot]`. It never pushes to `main`.
+2. A code owner reviews and **squash-merges** that PR.
+3. **Release** (`release.yml` in the package repo, runs on every push to `main`):
+   - the shared `release.yml` checks whether tag `vX.Y.Z` already exists. If it does
+     (an ordinary merge), nothing happens. If not, it runs `test.yml` (same `versions`
+     matrix if passed), builds sdist + wheel and uploads them as the `dist` artifact;
+   - the package repo's own **top-level** `publish` job downloads `dist`, publishes to
+     PyPI with **Trusted Publishing** (OIDC; must be top-level, a reusable workflow
+     cannot publish), and only then pushes tag `vX.Y.Z` and creates the GitHub Release
+     with generated notes. A failed publish leaves no tag, so the next push retries.
+4. **Version guard** (`version-guard.yml` in the package repo, on PRs to `main`/`dev`)
+   fails any PR that edits the `version =` line, unless it is the bot's
+   `release/bump-*` PR into `main`.
 
-```yaml
-name: Release
-on:
-  workflow_dispatch:
-    inputs:
-      bump:
-        description: "Version bump"
-        type: choice
-        options: [patch, minor, major]
-        default: patch
-jobs:
-  release:
-    uses: bnelair/brainmaze-sphinx/.github/workflows/release.yml@main
-    with:
-      bump: ${{ inputs.bump }}
-      pypi-auth: trusted          # or: token
-    secrets:
-      # Only forwarded secret; empty/unused under trusted publishing.
-      PYPI_Token_General: ${{ secrets.PYPI_Token_General }}
-    permissions:
-      contents: write
-      id-token: write
-```
+Package-repo callers (copy these verbatim from
+[brainmaze-eeg](https://github.com/bnelair/brainmaze-eeg/tree/main/.github/workflows)):
+`prepare-release.yml`, `release.yml`, `version-guard.yml`.
 
-Trigger a release from the package repo's **Actions → Release → Run workflow**, and
-pick `patch` / `minor` / `major`.
+Shared-workflow inputs:
 
-#### PyPI authentication
+| workflow | input | meaning |
+|---|---|---|
+| `prepare-release.yml` | `bump` (required) | `patch` / `minor` / `major` |
+| `release.yml` | `versions`, `python-version` | forwarded to `test.yml` |
+| `release.yml` | `bump` | **deprecated, ignored** (kept so old callers don't fail) |
+| `release.yml` outputs | `released`, `version` | `'true'` when an untagged version was built |
 
-- `pypi-auth: trusted` (default) uses [PyPI Trusted Publishing](https://docs.pypi.org/trusted-publishers/)
-  via OIDC — no stored secret. Configure a trusted publisher on each PyPI project
-  once: repo `bnelair/<package>`, workflow `release.yml`.
-- `pypi-auth: token` uses the `PYPI_Token_General` secret (forwarded explicitly via
-  the `secrets:` mapping — only that one secret, not `secrets: inherit`) with the
-  standard PyPI upload action.
+> **Note — callers pin `@main`.** A change merged here affects every package's CI and
+> releases immediately. Keep changes backward compatible (new inputs must have
+> defaults), or tag this repo and pin callers to a tag.
 
 ### `docs.yml`
 
