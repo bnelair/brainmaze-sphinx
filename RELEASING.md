@@ -68,9 +68,10 @@ Key properties:
   push to `main`; see [Recovering from a failed release](#recovering-from-a-failed-release).
 - **Publishing happens in the package's own top-level `release.yml`** because PyPI Trusted
   Publishing cannot publish from a reusable workflow (the OIDC identity has to be the
-  package repo's `release.yml`). The workflow is least-privilege: the reusable guard, test
-  and build jobs get a read-only token, and only `publish` gets `contents: write` +
-  `id-token: write`. Release runs of one repo are serialised (`concurrency`), so two quick
+  package repo's `release.yml`); token-publishing repos use the same layout. The workflow
+  is least-privilege: the reusable guard, test and build jobs get a read-only token, and
+  only `publish` gets `contents: write` (plus `id-token: write` where Trusted Publishing is
+  used). Release runs of one repo are serialised (`concurrency`), so two quick
   pushes cannot both publish/tag the same version.
 - **Docs** (`docs.yml`) rebuild on every push to `main` (site root) and `dev` (`/dev/`),
   independent of releases.
@@ -79,8 +80,8 @@ Key properties:
 
 | package | PyPI authentication |
 |---|---|
-| brainmaze-utils, brainmaze-eeg, brainmaze-zmq, brainmaze | **Trusted Publishing** (OIDC): PyPI publisher = owner `bnelair`, repo `<repo>`, workflow `release.yml`, no environment |
-| brainmaze-torch | **API token**, the organisation secret `PYPI_Token_General` (maintainer decision), passed to `pypa/gh-action-pypi-publish` as `password:` in its `publish` job. Everything else is the same flow. Its migration to this flow is a separate PR in brainmaze-torch. |
+| brainmaze-utils, brainmaze-eeg, brainmaze (meta; publishing disabled for now) | **Trusted Publishing** (OIDC): PyPI publisher = owner `bnelair`, repo `<repo>`, workflow `release.yml`, no environment. The `publish` job has `id-token: write`. |
+| brainmaze-zmq, brainmaze-torch | **API token**, the organisation secret `PYPI_Token_General` (maintainer decision), passed to `pypa/gh-action-pypi-publish` as `password:` in the `publish` job, which first fails loudly if the secret is empty or not shared with the repo. No `id-token: write`. Everything else is the same flow. |
 
 ## Cutting a release (step by step)
 
@@ -120,7 +121,7 @@ Find the failed *Release* run for the bump commit and go by the step that failed
 |---|---|---|
 | guard / test / build (flaky runner, network) | nothing published or tagged | **Re-run failed jobs** on that same run. It rebuilds the same commit. |
 | test / build (real bug) | nothing published or tagged | Fix it in a normal PR. Merging the fix is a push to `main` and releases the version from the fix commit, so review that PR as the release. |
-| publish: upload to PyPI (e.g. `invalid-publisher`) | nothing published or tagged | Fix the cause (PyPI publisher settings, token), then **Re-run failed jobs** on the same run. The `dist` artifact is kept with the run. |
+| publish: token check or upload to PyPI (e.g. `invalid-publisher`, missing secret) | nothing published or tagged | Fix the cause (PyPI publisher settings, token secret), then **Re-run failed jobs** on the same run. The `dist` artifact is kept with the run. |
 | publish: tag push, after a successful upload | PyPI has X.Y.Z, no tag | Do **not** re-run: PyPI files are immutable, so the upload step fails. Tag the commit that run built (the run's head SHA) by hand: `git tag vX.Y.Z <sha> && git push origin vX.Y.Z`, then `gh release create vX.Y.Z --verify-tag --title vX.Y.Z --generate-notes`. |
 | publish: `gh release create`, after the tag push | PyPI + tag, no GitHub Release | `gh release create vX.Y.Z --verify-tag --title vX.Y.Z --generate-notes`. Re-running would fail at the upload, and later runs skip because the tag exists. |
 
@@ -146,7 +147,7 @@ The release flow assumes `main` is protected (PR + review). What is configured t
 | brainmaze-utils | 4278916 (`main`) | 1 | squash | also requires code-owner review, which has **no effect**: there is no CODEOWNERS file. Org/repo admins bypass. |
 | brainmaze-eeg | 4286093 (`main` + `dev`) | 1 | squash | admins bypass |
 | brainmaze-torch | 4896155 (`main` + `dev`) | 1 | squash | admins bypass |
-| brainmaze-zmq | 2715191 (default branch) | **0** | merge, squash, rebase | a bump PR can be merged, and so published, without any review |
+| brainmaze-zmq | 2715191 (default branch) | 1 | squash | admins bypass (tightened from 0 approvals / all merge methods in October 2026) |
 | brainmaze | **none possible**: private repo on a plan without rulesets | — | — | `main` is unprotected; its release workflow is gated off (see that repo's `RELEASING.md`) |
 | brainmaze-sphinx | **none** | — | — | every caller uses `@main`, so a push here changes every package's CI and release |
 
@@ -163,11 +164,13 @@ with a GitHub App token and turning the setting off.
 
 ### Version guard is advisory
 
-No ruleset requires the *Version guard* (or CI) check, and admins can bypass rulesets anyway,
-so a red guard does not block a merge; reviewers must not merge a PR it flags. Simply making
-the check required would block every bump PR, because the bot's PR (opened with
-`GITHUB_TOKEN`) never runs the check. Making it enforceable needs both: open the bump PR with
-a GitHub App or fine-grained token (so workflows run on it), then require `guard` and CI.
+The *Version guard* stays advisory (maintainer decision): no ruleset requires it (or CI), so
+a red guard does not block a merge, and reviewers must not merge a PR it flags. It cannot
+simply be made a required check: *Prepare release* opens the bump PR with `GITHUB_TOKEN`,
+and PRs opened with `GITHUB_TOKEN` trigger no workflows, so a required check would never
+report on a bump PR and would block every release. Making it enforceable would need the bump
+PR to be opened with a GitHub App or fine-grained token (so workflows run on it), and then
+requiring `guard` and CI.
 
 ## One-time setup per package repository
 
@@ -175,13 +178,16 @@ a GitHub App or fine-grained token (so workflows run on it), then require `guard
       [brainmaze-eeg](https://github.com/bnelair/brainmaze-eeg/tree/main/.github/workflows):
       `ci.yml`, `docs.yml`, `prepare-release.yml`, `release.yml`, `version-guard.yml`
       (change only `package-import-name` in `ci.yml`).
-- [ ] **PyPI publishing**: on pypi.org → project → *Publishing* → add a GitHub
-      publisher: owner `bnelair`, repository `<repo>`, workflow `release.yml`, no environment.
-      (For a project that doesn't exist on PyPI yet, add a *pending* publisher.) Then delete
-      any PyPI API token the repo used before. (brainmaze-torch: token, see above.)
+- [ ] **PyPI publishing**, one of (see [How each package publishes](#how-each-package-publishes)):
+      Trusted Publishing: on pypi.org → project → *Publishing* → add a GitHub publisher:
+      owner `bnelair`, repository `<repo>`, workflow `release.yml`, no environment (for a
+      project that doesn't exist on PyPI yet, add a *pending* publisher); or the org token:
+      make sure the organisation secret `PYPI_Token_General` is shared with the repo.
 - [ ] **Organisation/repo setting**: *Settings → Actions → General → Allow GitHub Actions
-      to create and approve pull requests* (needed by Prepare release; read the trade-off
-      above).
+      to create and approve pull requests* (needed by Prepare release). **Risk:** with it
+      on, a workflow on a collaborator's own branch can approve that collaborator's PR,
+      which satisfies a 1-approval rule (see the trade-off above). Kept on by maintainer
+      decision; reviewers should look at who approved a PR before merging it.
 - [ ] **Ruleset** on `main`: require a PR with 1 approval, squash merge only, block
       deletion and force-push. (Not met everywhere yet; see the table above.)
 - [ ] **Pages**: *Settings → Pages → Deploy from a branch → `gh-pages` / root*.
@@ -195,8 +201,8 @@ a GitHub App or fine-grained token (so workflows run on it), then require `guard
 |---|---|---|
 | brainmaze-utils | current (PR-based, Trusted Publishing) | v2.0.0 (tagged at #25, see recovery above) |
 | brainmaze-eeg | current | v1.0.0 |
-| brainmaze-torch | migration PR in progress (token publishing) | old `release.yml` called removed inputs and could not publish |
-| brainmaze-zmq | migration PR open (bnelair/brainmaze-zmq#15) | v0.0.1 (old flow); needs its PyPI Trusted Publisher before the first new release |
+| brainmaze-torch | migration PR open (bnelair/brainmaze-torch#9), org token | old `release.yml` called removed inputs and could not publish |
+| brainmaze-zmq | migration PR open (bnelair/brainmaze-zmq#15), org token | v0.0.1 (old flow) |
 | brainmaze (meta, private repo) | migration PR open (bnelair/brainmaze#2), release gated off | never released from that repo; PyPI has only `0.0.0a0` |
 
 ## Contributor rules
@@ -256,6 +262,7 @@ How it is checked (detection, not a merge gate):
 | *Prepare release* fails creating the PR | Enable *Allow GitHub Actions to create and approve pull requests*. |
 | Release run failed part-way | See [Recovering from a failed release](#recovering-from-a-failed-release). |
 | Release run: publish fails with `invalid-publisher` | The Trusted Publisher on PyPI doesn't match: it must be repo `bnelair/<repo>`, workflow `release.yml`, no environment. Fix it on PyPI, then re-run the failed job (nothing was tagged). |
+| Release run: "Secret PYPI_Token_General is empty or not available" (zmq, torch) | The organisation secret is missing or not shared with this repo. Fix it in the org settings, then re-run the failed job (nothing was published or tagged). |
 | Release run: guard fails "[project].version ... is not X.Y.Z" | `pyproject.toml` has no static `[project].version` of the form `X.Y.Z`. Fix it in a reviewed PR. |
 | Release run did nothing after merging the bump | Tag `vX.Y.Z` already exists (version not actually bumped), or the guard's `git ls-remote` failed. Check the *guard* job log. |
 | A normal PR fails *Version guard* | It changes `[project].version`. Revert that line. |

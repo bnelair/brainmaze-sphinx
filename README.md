@@ -58,9 +58,11 @@ In short:
      matrix if passed), builds sdist + wheel and uploads them as the `dist` artifact;
    - the package repo's own **top-level** `publish` job downloads `dist`, publishes to
      PyPI with **Trusted Publishing** (OIDC; must be top-level, a reusable workflow
-     cannot publish), and only then pushes tag `vX.Y.Z` and creates the GitHub Release
+     cannot publish) or, in brainmaze-zmq and brainmaze-torch, the organisation API token
+     `PYPI_Token_General`, and only then pushes tag `vX.Y.Z` and creates the GitHub Release
      with generated notes. The caller's jobs are least-privilege (only `publish` gets
-     `contents: write` + `id-token: write`) and serialised per repo. If a run fails
+     `contents: write`, plus `id-token: write` for Trusted Publishing) and serialised per
+     repo. If a run fails
      part-way, re-run it or finish by hand; never wait for the next push, which would
      release a different commit ([recovery](RELEASING.md#recovering-from-a-failed-release)).
 4. **Version guard** (`version-guard.yml` in the package repo, entirely local, on PRs to
