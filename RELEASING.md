@@ -18,7 +18,7 @@ Runtime dependencies as declared in each package's `pyproject.toml` on `main`
 |---|---|---|---|
 | [`brainmaze-utils`](https://github.com/bnelair/brainmaze-utils) | `brainmaze_utils` | numpy, scipy, pandas, pytz, python-dateutil (no lower bounds) | <https://bnelair.github.io/brainmaze-utils/> |
 | [`brainmaze-eeg`](https://github.com/bnelair/brainmaze-eeg) | `brainmaze_eeg` | brainmaze-utils>=1.0.4, numpy>=1.20.0, pandas>=2.2.0, scikit-learn>=1.6.1, scipy, pytz, python-dateutil, tqdm, setuptools>=61 | <https://bnelair.github.io/brainmaze-eeg/> |
-| [`brainmaze-torch`](https://github.com/bnelair/brainmaze-torch) | `brainmaze_torch` | brainmaze-utils, torch, torchvision, torchaudio, pandas, scikit-learn, matplotlib, pyyaml, tqdm, pytz, python-dateutil, and (to be removed) setuptools, sphinx, sphinx_book_theme | <https://bnelair.github.io/brainmaze-torch/> |
+| [`brainmaze-torch`](https://github.com/bnelair/brainmaze-torch) | `brainmaze_torch` | numpy>=1.24, scipy>=1.10, torch>=2.3 (from bnelair/brainmaze-torch#9; v0.1.1 also pulled in brainmaze-utils, torchvision, torchaudio, pandas, scikit-learn, matplotlib, pyyaml, tqdm, pytz, python-dateutil, setuptools, sphinx, sphinx_book_theme) | <https://bnelair.github.io/brainmaze-torch/> |
 | [`brainmaze-zmq`](https://github.com/bnelair/brainmaze-zmq) | `brainmaze_zmq` | pyzmq, pythonping, tornado>=6.5 | <https://bnelair.github.io/brainmaze-zmq/> |
 | [`brainmaze`](https://github.com/bnelair/brainmaze) (private repo) | `brainmaze` | the four packages above, unpinned (meta-package) | — |
 
@@ -130,9 +130,10 @@ Find the failed *Release* run for the bump commit and go by the step that failed
 Release in dependency order and bump the lower bound in the dependents:
 
 1. `brainmaze-utils`
-2. `brainmaze-eeg` and `brainmaze-torch` (they depend on brainmaze-utils): in a normal PR,
-   raise `brainmaze_utils>=X.Y` in `dependencies` if they need the new release, merge, then
-   release. `brainmaze-zmq` does not depend on brainmaze-utils and can be released any time.
+2. `brainmaze-eeg` (depends on brainmaze-utils): in a normal PR, raise `brainmaze_utils>=X.Y`
+   in `dependencies` if it needs the new release, merge, then release. `brainmaze-torch` (from
+   bnelair/brainmaze-torch#9) and `brainmaze-zmq` don't depend on brainmaze-utils and can be
+   released any time.
 3. `brainmaze`, the meta-package: raise lower bounds if needed, then release.
 
 A dependent PR that needs an unreleased utils feature will fail CI until utils is on PyPI,
