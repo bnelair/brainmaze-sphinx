@@ -5,8 +5,11 @@ name: Test (reusable)
 #   uses: bnelair/brainmaze-sphinx/.github/workflows/test.yml@main
 # It runs the package's own test suite on one job per OS x version combination.
 #
-# `versions` (optional) is a JSON list of {"python": "...", "numpy": "..."} combinations;
-# "numpy" is a pip version specifier appended to "numpy" (e.g. "<2", ">=2", "" = latest).
+# `versions` (optional) is a non-empty JSON list of {"python": "...", "numpy": "..."}
+# combinations, with both values as JSON *strings* ("3.10", not 3.10 -> "3.1"). "numpy" is
+# a pip specifier appended to "numpy" ("<2", ">=2", "" = latest); a missing "python" falls
+# back to python-version. numpy<2 has no wheels for Python >= 3.13, so pair it with <= 3.12
+# (numpy is installed binary-only, so an impossible pair fails fast instead of compiling).
 # The family default is to test the oldest supported stack and the newest one:
 #   versions: '[{"python": "3.10", "numpy": "<2"}, {"python": "3.12", "numpy": ">=2"}]'
 # Without `versions`, a single combination (python-version, latest numpy) is used, which
@@ -28,6 +31,10 @@ on:
         type: string
         default: ""
 
+# Test jobs never need write access, even when called from a release workflow that has it.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ${{ matrix.os }}
@@ -36,7 +43,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         v: ${{ fromJSON(inputs.versions || format('[{{"python":"{0}","numpy":""}}]', inputs.python-version)) }}
-    name: test (${{ matrix.os }}, py${{ matrix.v.python }}, numpy${{ matrix.v.numpy || ' latest' }})
+    # Without `versions`, keep the historical check names ("test (ubuntu-latest)").
+    name: ${{ inputs.versions && format('test ({0}, py{1}, numpy{2})', matrix.os, matrix.v.python || inputs.python-version, matrix.v.numpy || ' latest') || format('test ({0})', matrix.os) }}
 
     steps:
       - name: Checkout
@@ -47,7 +55,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.v.python }}
+          python-version: ${{ matrix.v.python || inputs.python-version }}
 
       - name: Install package with test extra
         shell: bash
@@ -57,16 +65,28 @@ jobs:
           python -m pip install --upgrade pip
           pip install build
           if [ -n "$NUMPY_SPEC" ]; then
-            # resolve the package and the numpy constraint together
-            pip install -e '.[test]' "numpy${NUMPY_SPEC}"
+            # resolve the package and the numpy constraint together; never build numpy
+            pip install --only-binary=numpy -e '.[test]' "numpy${NUMPY_SPEC}"
           else
             pip install -e '.[test]'
           fi
-          python -c "import numpy, scipy; print('numpy', numpy.__version__, '| scipy', scipy.__version__)"
+          # Log the resolved environment (the numpy constraint can move other deps too).
+          # Not every package depends on numpy/scipy, so don't import them.
+          python - <<'PY'
+          import importlib.metadata as md
+          for d in ("numpy", "scipy", "pandas", "torch"):
+              try:
+                  print(f"{d} {md.version(d)}")
+              except md.PackageNotFoundError:
+                  print(f"{d} not installed")
+          PY
+          pip list
 
       - name: Print installed version
         if: ${{ inputs.package-import-name != '' }}
-        run: python -c "import ${{ inputs.package-import-name }} as p; print(p.__name__, p.__version__)"
+        env:
+          PKG: ${{ inputs.package-import-name }}
+        run: python -c "import importlib, os; p = importlib.import_module(os.environ['PKG']); print(p.__name__, p.__version__)"
 
       - name: Run tests
         run: python -m pytest

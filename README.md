@@ -29,8 +29,8 @@ jobs:
 
 | input | default | meaning |
 |---|---|---|
-| `versions` | `""` | JSON list of `{"python": "3.x", "numpy": "<pip specifier>"}`. `"numpy": ""` = latest. Empty = one job per OS with `python-version` and latest numpy (old behaviour). |
-| `python-version` | `"3.10"` | Used only when `versions` is empty. |
+| `versions` | `""` | Non-empty JSON list of `{"python": "3.x", "numpy": "<pip specifier>"}`, values as JSON strings (`"3.10"`, not `3.10`). `"numpy": ""` = latest; a missing `"python"` falls back to `python-version`. numpy is installed binary-only, so pair `"<2"` with Python <= 3.12. Empty = one job per OS with `python-version` and latest numpy (old behaviour and check names). |
+| `python-version` | `"3.10"` | Python when `versions` is empty or an entry has no `"python"`. |
 | `package-import-name` | `""` | Prints `<pkg>.__version__` after install. |
 
 Requirements on the consuming package:
@@ -38,19 +38,20 @@ Requirements on the consuming package:
 - an importable test suite discoverable by `python -m pytest`,
 - numpy-version support declared in `dependencies` that matches the matrix (every
   BrainMaze package must work on numpy 1.x **and** 2.x; see the family
-  [compatibility policy](https://github.com/bnelair/brainmaze/blob/main/RELEASING.md#compatibility-policy)).
+  [compatibility policy](RELEASING.md#compatibility-policy)).
 
 ### Release workflows (`prepare-release.yml` + `release.yml`)
 
-The full maintainer guide (one-time setup, step-by-step release, troubleshooting) is in
-[bnelair/brainmaze `RELEASING.md`](https://github.com/bnelair/brainmaze/blob/main/RELEASING.md).
+The full maintainer guide (one-time setup, step-by-step release, dependency order,
+compatibility policy, troubleshooting) is **[RELEASING.md](RELEASING.md)** in this repo.
 In short:
 
 1. **Prepare release** (manual, `workflow_dispatch`, pick `patch` / `minor` / `major`):
    the shared `prepare-release.yml` bumps `[project].version` in `pyproject.toml` on a new
    `release/bump-X.Y.Z` branch cut from `main` and opens a **"Release vX.Y.Z"** PR as
    `github-actions[bot]`. It never pushes to `main`.
-2. A code owner reviews and **squash-merges** that PR.
+2. A maintainer reviews it (the diff must be the version line only; CI does not run on a
+   bot-opened PR) and **squash-merges** it. The merge starts step 3 automatically.
 3. **Release** (`release.yml` in the package repo, runs on every push to `main`):
    - the shared `release.yml` checks whether tag `vX.Y.Z` already exists. If it does
      (an ordinary merge), nothing happens. If not, it runs `test.yml` (same `versions`
@@ -58,10 +59,14 @@ In short:
    - the package repo's own **top-level** `publish` job downloads `dist`, publishes to
      PyPI with **Trusted Publishing** (OIDC; must be top-level, a reusable workflow
      cannot publish), and only then pushes tag `vX.Y.Z` and creates the GitHub Release
-     with generated notes. A failed publish leaves no tag, so the next push retries.
-4. **Version guard** (`version-guard.yml` in the package repo, on PRs to `main`/`dev`)
-   fails any PR that edits the `version =` line, unless it is the bot's
-   `release/bump-*` PR into `main`.
+     with generated notes. The caller's jobs are least-privilege (only `publish` gets
+     `contents: write` + `id-token: write`) and serialised per repo. If a run fails
+     part-way, re-run it or finish by hand; never wait for the next push, which would
+     release a different commit ([recovery](RELEASING.md#recovering-from-a-failed-release)).
+4. **Version guard** (`version-guard.yml` in the package repo, entirely local, on PRs to
+   `main`/`dev`) flags any PR that changes `[project].version`, unless it is the bot's
+   `release/bump-*` PR into `main` that changes nothing else. It is advisory (not a
+   required check; see [RELEASING.md](RELEASING.md#version-guard-is-advisory)).
 
 Package-repo callers (copy these verbatim from
 [brainmaze-eeg](https://github.com/bnelair/brainmaze-eeg/tree/main/.github/workflows)):
@@ -72,8 +77,9 @@ Shared-workflow inputs:
 | workflow | input | meaning |
 |---|---|---|
 | `prepare-release.yml` | `bump` (required) | `patch` / `minor` / `major` |
-| `release.yml` | `versions`, `python-version` | forwarded to `test.yml` |
-| `release.yml` | `bump` | **deprecated, ignored** (kept so old callers don't fail) |
+| `release.yml` | `versions` | forwarded to `test.yml` |
+| `release.yml` | `python-version` | forwarded to `test.yml` **and** the interpreter used to build the distributions |
+| `release.yml` | `bump` | **deprecated, ignored**. Only the input is tolerated: old callers that also pass `pypi-auth` or `secrets: PYPI_Token_General` (no longer declared) fail validation, and the shared workflow no longer publishes. Such callers must migrate to the caller set below. |
 | `release.yml` outputs | `released`, `version` | `'true'` when an untagged version was built |
 
 > **Note — callers pin `@main`.** A change merged here affects every package's CI and

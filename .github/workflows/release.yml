@@ -19,7 +19,7 @@ on:
   workflow_call:
     inputs:
       bump:
-        description: "Deprecated and ignored -- version is bumped via the Prepare release PR. Kept optional so old callers don't fail."
+        description: "Deprecated and ignored -- the version is bumped by the Prepare release PR. Only this input is still accepted; callers must use the current caller set (see RELEASING.md)."
         type: string
         required: false
         default: ""
@@ -46,19 +46,31 @@ jobs:
   # Only release when the current pyproject version has no tag yet.
   guard:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       release: ${{ steps.check.outputs.release }}
       version: ${{ steps.check.outputs.version }}
     steps:
+      # Credentials stay persisted (read-only token): `git ls-remote` needs them on private repos.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"      # tomllib
       - name: Decide whether to release
         id: check
         shell: bash
         run: |
           set -euo pipefail
-          version="$(grep -m1 -E '^version[[:space:]]*=' pyproject.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          # [project].version only (not any other `version =` key), and it must be X.Y.Z:
+          # it ends up in a tag name and in the publish job's shell.
+          version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::[project].version '${version}' is not X.Y.Z; refusing to release."
+            exit 1
+          fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           # git ls-remote --exit-code: 0 = ref found, 2 = no matching ref, other = real error.
           # Distinguish them so a transient network/auth failure never looks like "no tag".
@@ -89,10 +101,13 @@ jobs:
     needs: [guard, test]
     if: needs.guard.outputs.release == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ inputs.python-version }}
