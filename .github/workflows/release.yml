@@ -8,7 +8,9 @@ name: Release (reusable)
 # publish step must run in the caller's own top-level workflow. Here we only:
 #   1. decide whether to release (the version on main has no tag yet),
 #   2. run the test suite,
-#   3. build the sdist + wheel and upload them as the `dist` artifact.
+#   3. build the sdist + wheel and upload them as the `dist` artifact,
+#   4. check that artifact's contents (check-dist.yml: only the package, no tests/demos/
+#      docs/data; `dist-check: error` makes a violation block the release).
 # The caller then downloads that artifact, publishes to PyPI (Trusted Publishing, matched
 # against the caller repo), and tags + creates the GitHub Release after a successful upload.
 #
@@ -28,6 +30,18 @@ on:
         default: "3.10"
       versions:
         description: "Passed to test.yml (JSON list of python/numpy combinations); empty = python-version only."
+        type: string
+        default: ""
+      dist-check:
+        description: "Artifact-content check of the built wheel + sdist (check-dist.yml), run on the exact `dist` artifact before it is handed to the caller's publish job: 'error' = fail on tests/demos/docs/data or files outside the package, 'warn' = annotate only (default), 'off' = skip."
+        type: string
+        default: "warn"
+      allowed-assets:
+        description: "Whitespace-separated globs of runtime data files the package needs, exempt from the data-file rule, e.g. 'brainmaze_torch/seizure_detection/_models/*.pt'."
+        type: string
+        default: ""
+      dist-packages:
+        description: "Whitespace-separated top-level packages allowed in the artifacts; empty = derived from the distribution name."
         type: string
         default: ""
     outputs:
@@ -96,6 +110,8 @@ jobs:
     with:
       python-version: ${{ inputs.python-version }}
       versions: ${{ inputs.versions }}
+      # The artifact check runs below on the real `dist` artifact, not on a rebuild.
+      dist-check: "off"
 
   build:
     needs: [guard, test]
@@ -121,3 +137,15 @@ jobs:
           name: dist
           path: dist/
           if-no-files-found: error
+
+  # The caller's publish job needs this whole workflow, so with `dist-check: error` an
+  # unwanted file in the artifact blocks the release.
+  check-dist:
+    needs: [guard, build]
+    if: needs.guard.outputs.release == 'true' && inputs.dist-check != 'off'
+    uses: bnelair/brainmaze-sphinx/.github/workflows/check-dist.yml@main
+    with:
+      artifact: dist
+      dist-check: ${{ inputs.dist-check }}
+      allowed-assets: ${{ inputs.allowed-assets }}
+      dist-packages: ${{ inputs.dist-packages }}

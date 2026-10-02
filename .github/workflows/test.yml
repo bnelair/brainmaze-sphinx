@@ -14,6 +14,12 @@ name: Test (reusable)
 #   versions: '[{"python": "3.10", "numpy": "<2"}, {"python": "3.12", "numpy": ">=2"}]'
 # Without `versions`, a single combination (python-version, latest numpy) is used, which
 # keeps older callers working unchanged.
+#
+# The `dist-contents` job builds the wheel + sdist from the checkout and checks that they
+# contain only the package (check-dist.yml; inputs dist-check, allowed-assets,
+# dist-packages), so a packaging regression fails on the PR, before any release. The tests
+# themselves always run from the repository checkout (editable install), so excluding the
+# test suite from the artifacts does not affect them.
 
 on:
   workflow_call:
@@ -28,6 +34,18 @@ on:
         default: ""
       package-import-name:
         description: "Importable package name, e.g. brainmaze_utils (used only to print the installed version)."
+        type: string
+        default: ""
+      dist-check:
+        description: "Artifact-content check of the built wheel + sdist (check-dist.yml): 'error' = fail on tests/demos/docs/data or files outside the package, 'warn' = annotate only (default), 'off' = skip."
+        type: string
+        default: "warn"
+      allowed-assets:
+        description: "Whitespace-separated globs of runtime data files the package needs, exempt from the data-file rule, e.g. 'brainmaze_torch/seizure_detection/_models/*.pt'."
+        type: string
+        default: ""
+      dist-packages:
+        description: "Whitespace-separated top-level packages allowed in the artifacts; empty = derived from the distribution name."
         type: string
         default: ""
 
@@ -90,3 +108,11 @@ jobs:
 
       - name: Run tests
         run: python -m pytest
+
+  dist-contents:
+    if: inputs.dist-check != 'off'
+    uses: bnelair/brainmaze-sphinx/.github/workflows/check-dist.yml@main
+    with:
+      dist-check: ${{ inputs.dist-check }}
+      allowed-assets: ${{ inputs.allowed-assets }}
+      dist-packages: ${{ inputs.dist-packages }}

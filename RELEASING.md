@@ -45,6 +45,8 @@ callers of those workflows. Two caller workflows contain real logic of their own
                                  1. guard: is tag vX.Y.Z new?  no → stop (ordinary merge)
                                  2. run the test suite (test.yml matrix)
                                  3. build sdist + wheel  → artifact "dist"
+                                    and check its contents (package only, no
+                                    tests/demos/docs/data; check-dist.yml)
                                  4. publish job (top level)                    ──► PyPI X.Y.Z
                                  5. push tag vX.Y.Z, create GitHub Release   ──► Release + notes
 ```
@@ -195,6 +197,15 @@ requiring `guard` and CI.
 - [ ] `pyproject.toml`: static `version = "X.Y.Z"` in `[project]`, `requires-python = ">=3.10"`,
       a `test` extra with `pytest`, and runtime dependencies that the code actually imports
       (no docs or test tools in `dependencies`).
+- [ ] **Release artifacts contain only the package** (maintainer rule: no data, tests,
+      demos or docs in the wheel or the sdist). In `pyproject.toml`:
+      `[tool.setuptools.packages.find] include = ["<pkg>", "<pkg>.*"]` (exclude
+      `<pkg>.tests*` if the tests live inside the package), `include-package-data = false`,
+      and `[tool.setuptools.package-data]` only for files needed at runtime; a `MANIFEST.in`
+      that prunes `tests/`, `demo/`, `docs_src/`, `img/`, `.github/` and data files from the
+      sdist. Pass `dist-check: error` (and `allowed-assets` for required runtime data, e.g.
+      brainmaze-torch's `*.pt` models) to `test.yml` in `ci.yml` and to `release.yml`; see
+      [`check-dist.yml`](README.md#check-distyml).
 
 ### Release-system status (October 2026)
 

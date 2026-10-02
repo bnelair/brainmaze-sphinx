@@ -1,0 +1,216 @@
+name: Check distributions (reusable)
+
+# Reusable artifact-content check shared across the BrainMaze package family.
+#
+# Family rule (maintainer): release artifacts ship ONLY the package code and the runtime
+# assets it needs -- never tests, demos, docs or data. This workflow inspects the wheel AND
+# the sdist and reports every file that is
+#   - outside the package directory (allowed besides it: *.dist-info/ in the wheel; PKG-INFO,
+#     pyproject.toml, setup.cfg, setup.py, MANIFEST.in, LICENSE*/COPYING*/NOTICE*/README*
+#     and *.egg-info/ at the sdist root),
+#   - inside a tests/, test/, demo/, demos/, docs/, docs_src/, examples/ or .github/ directory,
+#   - a data file (.npz .npy .mat .edf .bdf .csv .tsv .xml .pkl .pickle .h5 .hdf5 .nwb .pt
+#     .pth .ckpt .onnx .parquet .feather .zip .gz .tar .mef .mefd) unless it matches one of
+#     the `allowed-assets` globs (e.g. brainmaze-torch's trained models).
+# It also prints each artifact's size and its largest files.
+#
+# test.yml calls it on every push/PR (it builds from the checkout); release.yml calls it on
+# the exact `dist` artifact that is about to be published.
+#
+# Callers normally do not call this file directly; they pass the inputs to test.yml and
+# release.yml:
+#   uses: bnelair/brainmaze-sphinx/.github/workflows/check-dist.yml@main
+
+on:
+  workflow_call:
+    inputs:
+      dist-check:
+        description: "'error' = fail on an unwanted file, 'warn' = annotate only (default, backward compatible), 'off' = skip."
+        type: string
+        default: "warn"
+      allowed-assets:
+        description: "Whitespace-separated globs of required runtime data files, relative to the artifact root, e.g. 'brainmaze_torch/seizure_detection/_models/*.pt'."
+        type: string
+        default: ""
+      dist-packages:
+        description: "Whitespace-separated top-level import packages allowed in the artifacts. Empty = the distribution name from the wheel file name (brainmaze-eeg -> brainmaze_eeg)."
+        type: string
+        default: ""
+      artifact:
+        description: "Name of an uploaded artifact holding the built wheel + sdist to check. Empty = build them from the checkout."
+        type: string
+        default: ""
+      python-version:
+        description: "Python used to build the distributions (when `artifact` is empty)."
+        type: string
+        default: "3.12"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    if: inputs.dist-check != 'off'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        if: inputs.artifact == ''
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Build sdist + wheel
+        if: inputs.artifact == ''
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --outdir "$RUNNER_TEMP/dist-check"
+
+      - name: Download distributions
+        if: inputs.artifact != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact }}
+          path: ${{ runner.temp }}/dist-check
+
+      - name: Check artifact contents
+        shell: python
+        env:
+          DIST_DIR: ${{ runner.temp }}/dist-check
+          DIST_CHECK_MODE: ${{ inputs.dist-check }}
+          DIST_PACKAGES: ${{ inputs.dist-packages }}
+          ALLOWED_ASSETS: ${{ inputs.allowed-assets }}
+        run: |
+          """Check that built distributions (wheel + sdist) ship only the package.
+
+          Environment:
+            DIST_DIR        directory with the built *.whl and *.tar.gz (default: dist)
+            DIST_PACKAGES   whitespace-separated top-level import packages allowed in the artifacts
+                            (default: the distribution name from the wheel file name, e.g. brainmaze_eeg)
+            ALLOWED_ASSETS  whitespace-separated globs (paths relative to the artifact root, e.g.
+                            brainmaze_torch/seizure_detection/_models/*.pt) exempt from the data-file rule
+            DIST_CHECK_MODE error (fail on unwanted files) | warn (annotate only; default)
+          """
+          import fnmatch
+          import os
+          import pathlib
+          import sys
+          import tarfile
+          import zipfile
+
+          DATA_EXT = {
+              ".npz", ".npy", ".mat", ".edf", ".bdf", ".csv", ".tsv", ".xml", ".pkl", ".pickle",
+              ".h5", ".hdf5", ".nwb", ".pt", ".pth", ".ckpt", ".onnx", ".parquet", ".feather",
+              ".zip", ".gz", ".tar", ".mef", ".mefd",
+          }
+          # A path component with one of these names is never part of a runtime package.
+          FORBIDDEN_DIRS = {"tests", "test", "demo", "demos", "docs", "docs_src", "examples", ".github"}
+          # Allowed top-level files of an sdist besides the package directories.
+          SDIST_ROOT_FILES = ("PKG-INFO", "pyproject.toml", "setup.cfg", "setup.py", "MANIFEST.in")
+          SDIST_ROOT_PREFIXES = ("LICENSE", "LICENCE", "COPYING", "NOTICE", "README")
+
+          dist_dir = pathlib.Path(os.environ.get("DIST_DIR") or "dist")
+          mode = os.environ.get("DIST_CHECK_MODE") or "warn"
+          if mode not in ("error", "warn"):
+              print(f"::error::dist-check must be 'error', 'warn' or 'off', got '{mode}'")
+              sys.exit(1)
+          packages = os.environ.get("DIST_PACKAGES", "").split()
+          allowed = os.environ.get("ALLOWED_ASSETS", "").split()
+          if packages:
+              print(f"Allowed top-level packages: {packages}")
+          print(f"Allowed asset globs: {allowed or '(none)'}")
+
+
+          def check_inside(path):
+              """Rules for a file inside an allowed package directory."""
+              parts = path.split("/")
+              bad = FORBIDDEN_DIRS.intersection(parts[1:-1])
+              if bad:
+                  return f"inside a '{sorted(bad)[0]}/' directory"
+              ext = pathlib.PurePosixPath(path).suffix.lower()
+              if ext in DATA_EXT and not any(fnmatch.fnmatchcase(path, g) for g in allowed):
+                  return f"data file ({ext}); list it in allowed-assets if it is needed at runtime"
+              return None
+
+
+          def in_package(path):
+              top = path.split("/")[0]
+              return top in packages or (path.count("/") == 0 and path.removesuffix(".py") in packages)
+
+
+          def check_wheel(path):
+              errors, files = [], []
+              with zipfile.ZipFile(path) as z:
+                  for info in z.infolist():
+                      if info.is_dir():
+                          continue
+                      name = info.filename
+                      files.append((info.file_size, name))
+                      top = name.split("/")[0]
+                      if top.endswith(".dist-info"):
+                          continue
+                      if not in_package(name):
+                          errors.append((name, "outside the package"))
+                      elif (why := check_inside(name)):
+                          errors.append((name, why))
+              return files, errors
+
+
+          def check_sdist(path):
+              errors, files = [], []
+              with tarfile.open(path) as t:
+                  for m in t.getmembers():
+                      if m.isdir():
+                          continue
+                      parts = m.name.split("/", 1)
+                      if len(parts) < 2:
+                          errors.append((m.name, "outside the sdist root directory"))
+                          continue
+                      name = parts[1]
+                      files.append((m.size, name))
+                      top = name.split("/")[0]
+                      if "/" not in name and (name in SDIST_ROOT_FILES or name.startswith(SDIST_ROOT_PREFIXES)):
+                          continue
+                      if top.endswith(".egg-info"):
+                          continue
+                      if not in_package(name):
+                          errors.append((name, "outside the package"))
+                      elif (why := check_inside(name)):
+                          errors.append((name, why))
+              return files, errors
+
+
+          wheels = sorted(dist_dir.glob("*.whl"))
+          sdists = sorted(dist_dir.glob("*.tar.gz"))
+          if not wheels or not sdists:
+              print(f"::error::Expected at least one wheel and one sdist in {dist_dir}/, found "
+                    f"{[p.name for p in wheels + sdists]}")
+              sys.exit(1)
+
+          if not packages:
+              # Wheel file names carry the normalised distribution name: brainmaze_eeg-2.0.0-py3-...
+              packages = sorted({w.name.split("-")[0].lower() for w in wheels})
+              print(f"Allowed top-level packages (from the wheel name): {packages}")
+
+          failed = False
+          for art in wheels + sdists:
+              files, errors = check_wheel(art) if art.suffix == ".whl" else check_sdist(art)
+              size = art.stat().st_size
+              total = sum(s for s, _ in files)
+              print(f"\n{art.name}: {size / 1e6:.3f} MB compressed, {total / 1e6:.3f} MB in {len(files)} files")
+              for s, n in sorted(files, reverse=True)[:5]:
+                  print(f"  {s:>12,d}  {n}")
+              for n, why in errors:
+                  print(f"::{mode} title=Unwanted file in {art.name}::{n}: {why}")
+              failed |= bool(errors)
+
+          if failed:
+              print("\nRelease artifacts must contain only the package code and required runtime assets "
+                    "(no tests, demos, docs or data). Fix the package discovery / MANIFEST.in, or list a "
+                    "required runtime asset in the allowed-assets input.")
+              sys.exit(1 if mode == "error" else 0)
+          print("\nArtifact contents OK.")

@@ -32,6 +32,9 @@ jobs:
 | `versions` | `""` | Non-empty JSON list of `{"python": "3.x", "numpy": "<pip specifier>"}`, values as JSON strings (`"3.10"`, not `3.10`). `"numpy": ""` = latest; a missing `"python"` falls back to `python-version`. numpy is installed binary-only, so pair `"<2"` with Python <= 3.12. Empty = one job per OS with `python-version` and latest numpy (old behaviour and check names). |
 | `python-version` | `"3.10"` | Python when `versions` is empty or an entry has no `"python"`. |
 | `package-import-name` | `""` | Prints `<pkg>.__version__` after install. |
+| `dist-check` | `"warn"` | Artifact-content check (job `dist-contents`, see [`check-dist.yml`](#check-distyml)): `"error"` fails the run on an unwanted file, `"warn"` only annotates, `"off"` skips it. |
+| `allowed-assets` | `""` | Whitespace-separated globs of runtime data files the package needs (exempt from the data-file rule), relative to the artifact root, e.g. `brainmaze_torch/seizure_detection/_models/*.pt`. |
+| `dist-packages` | `""` | Top-level packages allowed in the artifacts; empty = the distribution name with `-` → `_`. |
 
 Requirements on the consuming package:
 - a `pyproject.toml` with a `test` optional-dependency extra that includes `pytest`,
@@ -39,6 +42,46 @@ Requirements on the consuming package:
 - numpy-version support declared in `dependencies` that matches the matrix (every
   BrainMaze package must work on numpy 1.x **and** 2.x; see the family
   [compatibility policy](RELEASING.md#compatibility-policy)).
+
+The tests run from the repository checkout (editable install), so the test suite and its
+data stay **out** of the wheel and sdist (see [`check-dist.yml`](#check-distyml)).
+
+### `check-dist.yml`
+
+Family rule: the wheel **and** the sdist ship only the package code and the runtime
+assets it needs; never tests, demos, docs or data (they are unnecessary size at
+deployment). `check-dist.yml` builds (or downloads) both artifacts, prints their size and
+largest files, and reports every file that is outside the package directory (besides
+`*.dist-info/`, and `PKG-INFO`, `pyproject.toml`, `setup.cfg`, `setup.py`, `MANIFEST.in`,
+`LICENSE*`/`README*` and `*.egg-info/` at the sdist root), inside a `tests/`, `test/`,
+`demo/`, `demos/`, `docs/`, `docs_src/`, `examples/` or `.github/` directory, or a data
+file (`.npz .npy .mat .edf .bdf .csv .tsv .xml .pkl .pickle .h5 .hdf5 .nwb .pt .pth .ckpt
+.onnx .parquet .feather .zip .gz .tar .mef .mefd`) not matched by `allowed-assets`.
+
+It runs automatically: `test.yml` checks a fresh build on every push/PR (job
+`dist-contents`), and `release.yml` checks the exact `dist` artifact before the caller's
+`publish` job may run. Callers set the inputs on both:
+
+```yaml
+# ci.yml
+    uses: bnelair/brainmaze-sphinx/.github/workflows/test.yml@main
+    with:
+      package-import-name: brainmaze_torch
+      dist-check: error
+      allowed-assets: brainmaze_torch/seizure_detection/_models/*.pt   # only if needed
+# release.yml (the `build` job)
+    uses: bnelair/brainmaze-sphinx/.github/workflows/release.yml@main
+    with:
+      dist-check: error
+      allowed-assets: brainmaze_torch/seizure_detection/_models/*.pt
+```
+
+The default `"warn"` keeps callers that have not cleaned up their packaging green (the
+offending files show as warnings); every family package should set `dist-check: error`.
+To keep artifacts clean, restrict setuptools discovery to the package
+(`include = ["<pkg>", "<pkg>.*"]`, exclude `<pkg>.tests*`), set
+`include-package-data = false` with an explicit `[tool.setuptools.package-data]` for
+required assets, and `prune` everything else from the sdist in `MANIFEST.in`.
 
 ### Release workflows (`prepare-release.yml` + `release.yml`)
 
@@ -81,6 +124,7 @@ Shared-workflow inputs:
 | `prepare-release.yml` | `bump` (required) | `patch` / `minor` / `major` |
 | `release.yml` | `versions` | forwarded to `test.yml` |
 | `release.yml` | `python-version` | forwarded to `test.yml` **and** the interpreter used to build the distributions |
+| `release.yml` | `dist-check`, `allowed-assets`, `dist-packages` | artifact-content check of the built `dist` artifact (see [`check-dist.yml`](#check-distyml)); with `dist-check: error` a violation blocks the publish |
 | `release.yml` | `bump` | **deprecated, ignored**. Only the input is tolerated: old callers that also pass `pypi-auth` or `secrets: PYPI_Token_General` (no longer declared) fail validation, and the shared workflow no longer publishes. Such callers must migrate to the caller set below. |
 | `release.yml` outputs | `released`, `version` | `'true'` when an untagged version was built |
 
