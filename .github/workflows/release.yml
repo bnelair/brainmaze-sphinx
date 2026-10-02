@@ -37,7 +37,11 @@ on:
         type: string
         default: "warn"
       allowed-assets:
-        description: "Whitespace-separated globs of runtime data files the package needs, exempt from the data-file rule, e.g. 'brainmaze_torch/seizure_detection/_models/*.pt'."
+        description: "Whitespace-separated globs (relative to the artifact root, matched per path segment; '**' = any depth) of non-code files the package may ship, e.g. 'brainmaze_torch/seizure_detection/_models/*.pt'."
+        type: string
+        default: ""
+      required-assets:
+        description: "Whitespace-separated globs that must each match at least one file in the wheel AND the sdist (allowed too); a missing one fails even in 'warn' mode."
         type: string
         default: ""
       dist-packages:
@@ -147,5 +151,7 @@ jobs:
     with:
       artifact: dist
       dist-check: ${{ inputs.dist-check }}
+      python-version: ${{ inputs.python-version }}
       allowed-assets: ${{ inputs.allowed-assets }}
+      required-assets: ${{ inputs.required-assets }}
       dist-packages: ${{ inputs.dist-packages }}

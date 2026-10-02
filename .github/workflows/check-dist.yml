@@ -4,15 +4,20 @@ name: Check distributions (reusable)
 #
 # Family rule (maintainer): release artifacts ship ONLY the package code and the runtime
 # assets it needs -- never tests, demos, docs or data. This workflow inspects the wheel AND
-# the sdist and reports every file that is
-#   - outside the package directory (allowed besides it: *.dist-info/ in the wheel; PKG-INFO,
-#     pyproject.toml, setup.cfg, setup.py, MANIFEST.in, LICENSE*/COPYING*/NOTICE*/README*
-#     and *.egg-info/ at the sdist root),
-#   - inside a tests/, test/, demo/, demos/, docs/, docs_src/, examples/ or .github/ directory,
-#   - a data file (.npz .npy .mat .edf .bdf .csv .tsv .xml .pkl .pickle .h5 .hdf5 .nwb .pt
-#     .pth .ckpt .onnx .parquet .feather .zip .gz .tar .mef .mefd) unless it matches one of
-#     the `allowed-assets` globs (e.g. brainmaze-torch's trained models).
-# It also prints each artifact's size and its largest files.
+# the sdist (allowlist) and reports every file that is
+#   - outside the package directory. Allowed besides it: the package's own
+#     <dist>-<ver>.dist-info/ (known metadata files + licenses/) in the wheel; PKG-INFO,
+#     pyproject.toml, setup.cfg, setup.py, MANIFEST.in, README/LICENSE/LICENCE/COPYING/NOTICE
+#     (optionally .md/.rst/.txt) and the package's own <dist>.egg-info/ at the sdist root,
+#   - inside the package but not code: only *.py, *.pyi and py.typed are allowed, plus files
+#     matching the `allowed-assets` / `required-assets` globs (e.g. brainmaze-torch's models),
+#   - inside a tests/, test/, demo/, demos/, docs/, docs_src/, examples/ or .github/ directory
+#     (any case), or a test file (conftest.py, test_*.py, *_test.py) anywhere,
+#   - a symlink/hardlink/non-regular member or a member name with '..' / an absolute path.
+# Every `required-assets` glob must match at least one file in the wheel AND the sdist;
+# a missing required asset fails in both 'warn' and 'error' mode (the package would be broken).
+# Globs are matched per path segment: '*' never crosses '/'; a '**' segment matches zero or
+# more directories. It also prints each artifact's size and its largest files.
 #
 # test.yml calls it on every push/PR (it builds from the checkout); release.yml calls it on
 # the exact `dist` artifact that is about to be published.
@@ -29,7 +34,11 @@ on:
         type: string
         default: "warn"
       allowed-assets:
-        description: "Whitespace-separated globs of required runtime data files, relative to the artifact root, e.g. 'brainmaze_torch/seizure_detection/_models/*.pt'."
+        description: "Whitespace-separated globs (relative to the artifact root, matched per path segment; '**' = any depth) of non-code files that may ship inside the package, e.g. 'brainmaze_torch/seizure_detection/_models/*.pt'."
+        type: string
+        default: ""
+      required-assets:
+        description: "Whitespace-separated globs (same syntax) that must each match at least one file in the wheel AND the sdist; they are allowed too. A missing one fails in 'warn' mode as well."
         type: string
         default: ""
       dist-packages:
@@ -84,34 +93,46 @@ jobs:
           DIST_CHECK_MODE: ${{ inputs.dist-check }}
           DIST_PACKAGES: ${{ inputs.dist-packages }}
           ALLOWED_ASSETS: ${{ inputs.allowed-assets }}
+          REQUIRED_ASSETS: ${{ inputs.required-assets }}
         run: |
           """Check that built distributions (wheel + sdist) ship only the package.
 
           Environment:
-            DIST_DIR        directory with the built *.whl and *.tar.gz (default: dist)
-            DIST_PACKAGES   whitespace-separated top-level import packages allowed in the artifacts
-                            (default: the distribution name from the wheel file name, e.g. brainmaze_eeg)
-            ALLOWED_ASSETS  whitespace-separated globs (paths relative to the artifact root, e.g.
-                            brainmaze_torch/seizure_detection/_models/*.pt) exempt from the data-file rule
-            DIST_CHECK_MODE error (fail on unwanted files) | warn (annotate only; default)
+            DIST_DIR         directory with the built *.whl and *.tar.gz (default: dist)
+            DIST_PACKAGES    whitespace-separated top-level import packages allowed in the artifacts
+                             (default: the distribution name from the wheel file name, e.g. brainmaze_eeg)
+            ALLOWED_ASSETS   whitespace-separated globs (paths relative to the artifact root) of non-code
+                             files that may ship inside the package
+            REQUIRED_ASSETS  whitespace-separated globs that must each match at least one file in EVERY
+                             artifact (wheel and sdist); they are allowed as well
+            DIST_CHECK_MODE  error (fail on unwanted files) | warn (annotate only; default).
+                             A missing required asset fails in both modes.
+
+          Globs are matched per path segment: '*', '?' and '[...]' never cross '/', and a '**' segment
+          matches zero or more whole segments. Directory and test-file names are matched case-insensitively.
           """
           import fnmatch
           import os
           import pathlib
+          import re
           import sys
           import tarfile
           import zipfile
 
-          DATA_EXT = {
-              ".npz", ".npy", ".mat", ".edf", ".bdf", ".csv", ".tsv", ".xml", ".pkl", ".pickle",
-              ".h5", ".hdf5", ".nwb", ".pt", ".pth", ".ckpt", ".onnx", ".parquet", ".feather",
-              ".zip", ".gz", ".tar", ".mef", ".mefd",
-          }
-          # A path component with one of these names is never part of a runtime package.
+          # Allowlist: inside a package only Python source, stubs and the PEP 561 marker are code.
+          # Every other file must match allowed-assets / required-assets.
+          CODE_SUFFIXES = (".py", ".pyi")
+          CODE_NAMES = {"py.typed"}
+          # A directory with one of these names (any case) is never part of a runtime package.
           FORBIDDEN_DIRS = {"tests", "test", "demo", "demos", "docs", "docs_src", "examples", ".github"}
-          # Allowed top-level files of an sdist besides the package directories.
-          SDIST_ROOT_FILES = ("PKG-INFO", "pyproject.toml", "setup.cfg", "setup.py", "MANIFEST.in")
-          SDIST_ROOT_PREFIXES = ("LICENSE", "LICENCE", "COPYING", "NOTICE", "README")
+          TEST_FILE = re.compile(r"^(conftest\.py|test_.*\.py|.*_test\.py)$", re.IGNORECASE)
+          # Exact root files allowed in an sdist besides the package and its own <dist>.egg-info/.
+          SDIST_ROOT_FILES = {"PKG-INFO", "pyproject.toml", "setup.cfg", "setup.py", "MANIFEST.in"}
+          DOC_FILE = re.compile(r"^(README|LICEN[CS]E|COPYING|NOTICE)(\.(md|rst|txt))?$")
+          # Known files of the package's own <dist>-<ver>.dist-info/ and <dist>.egg-info/.
+          DIST_INFO_FILES = {"METADATA", "WHEEL", "RECORD", "top_level.txt", "entry_points.txt"}
+          EGG_INFO_FILES = {"PKG-INFO", "SOURCES.txt", "dependency_links.txt", "requires.txt",
+                            "top_level.txt", "entry_points.txt", "not-zip-safe"}
 
           dist_dir = pathlib.Path(os.environ.get("DIST_DIR") or "dist")
           mode = os.environ.get("DIST_CHECK_MODE") or "warn"
@@ -120,22 +141,59 @@ jobs:
               sys.exit(1)
           level = "error" if mode == "error" else "warning"  # GitHub annotation command
           packages = os.environ.get("DIST_PACKAGES", "").split()
-          allowed = os.environ.get("ALLOWED_ASSETS", "").split()
-          if packages:
-              print(f"Allowed top-level packages: {packages}")
+          required = os.environ.get("REQUIRED_ASSETS", "").split()
+          allowed = os.environ.get("ALLOWED_ASSETS", "").split() + required
           print(f"Allowed asset globs: {allowed or '(none)'}")
+          print(f"Required asset globs: {required or '(none)'}")
+
+
+          def esc_data(s):
+              return s.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+          def esc_prop(s):
+              return esc_data(s).replace(":", "%3A").replace(",", "%2C")
+
+
+          def annotate(lvl, title, msg):
+              print(f"::{lvl} title={esc_prop(title)}::{esc_data(msg)}")
+
+
+          def seg_match(segs, pats):
+              """Match path segments against glob segments; a '**' segment = zero or more segments."""
+              if not pats:
+                  return not segs
+              if pats[0] == "**":
+                  return any(seg_match(segs[i:], pats[1:]) for i in range(len(segs) + 1))
+              return bool(segs) and fnmatch.fnmatchcase(segs[0], pats[0]) and seg_match(segs[1:], pats[1:])
+
+
+          def glob_match(path, pattern):
+              return seg_match(path.split("/"), pattern.strip("/").split("/"))
+
+
+          def norm(name):
+              return re.sub(r"[-_.]+", "_", name).lower()
+
+
+          def unsafe(name):
+              return name.startswith("/") or ".." in name.split("/")
 
 
           def check_inside(path):
-              """Rules for a file inside an allowed package directory."""
+              """Rules for a file inside an allowed package directory (allowlist)."""
               parts = path.split("/")
-              bad = FORBIDDEN_DIRS.intersection(parts[1:-1])
+              bad = FORBIDDEN_DIRS.intersection(p.lower() for p in parts[1:-1])
               if bad:
                   return f"inside a '{sorted(bad)[0]}/' directory"
-              ext = pathlib.PurePosixPath(path).suffix.lower()
-              if ext in DATA_EXT and not any(fnmatch.fnmatchcase(path, g) for g in allowed):
-                  return f"data file ({ext}); list it in allowed-assets if it is needed at runtime"
-              return None
+              fname = parts[-1]
+              if TEST_FILE.match(fname):
+                  return "test file (conftest.py / test_*.py / *_test.py)"
+              if any(glob_match(path, g) for g in allowed):
+                  return None
+              if fname.endswith(CODE_SUFFIXES) or fname in CODE_NAMES:
+                  return None
+              return "not package code (.py/.pyi/py.typed); list it in allowed-assets if it is needed at runtime"
 
 
           def in_package(path):
@@ -143,45 +201,65 @@ jobs:
               return top in packages or (path.count("/") == 0 and path.removesuffix(".py") in packages)
 
 
+          def classify(name, meta_dir, meta_files, errors):
+              """Rules for a file name relative to the artifact root (wheel root or sdist root dir)."""
+              top, _, rest = name.partition("/")
+              if meta_dir and top == meta_dir and rest:
+                  if not (rest in meta_files or DOC_FILE.match(rest)
+                          or (rest.startswith("licenses/") and DOC_FILE.match(rest.rsplit("/", 1)[-1]))):
+                      errors.append((name, f"unexpected file in {meta_dir}/"))
+              elif not in_package(name):
+                  errors.append((name, "outside the package"))
+              elif (why := check_inside(name)):
+                  errors.append((name, why))
+
+
           def check_wheel(path):
               errors, files = [], []
+              # Wheel name {dist}-{ver}-...whl; the package's metadata dir is exactly {dist}-{ver}.dist-info.
+              dist, ver = path.name.split("-")[:2]
+              meta_dir = f"{dist}-{ver}.dist-info"
               with zipfile.ZipFile(path) as z:
                   for info in z.infolist():
                       if info.is_dir():
                           continue
                       name = info.filename
                       files.append((info.file_size, name))
-                      top = name.split("/")[0]
-                      if top.endswith(".dist-info"):
-                          continue
-                      if not in_package(name):
-                          errors.append((name, "outside the package"))
-                      elif (why := check_inside(name)):
-                          errors.append((name, why))
+                      if unsafe(name):
+                          errors.append((name, "absolute path or '..' in the member name"))
+                      else:
+                          classify(name, meta_dir, DIST_INFO_FILES, errors)
               return files, errors
 
 
           def check_sdist(path):
               errors, files = [], []
+              root = path.name.removesuffix(".tar.gz")          # {dist}-{ver}
+              egg_info = norm(root.rsplit("-", 1)[0])           # its own {dist}.egg-info (normalised)
               with tarfile.open(path) as t:
                   for m in t.getmembers():
                       if m.isdir():
                           continue
                       parts = m.name.split("/", 1)
-                      if len(parts) < 2:
-                          errors.append((m.name, "outside the sdist root directory"))
+                      if unsafe(m.name):
+                          errors.append((m.name, "absolute path or '..' in the member name"))
+                          continue
+                      if parts[0] != root or len(parts) < 2:
+                          errors.append((m.name, f"outside the sdist root directory {root}/"))
                           continue
                       name = parts[1]
+                      if m.issym() or m.islnk():
+                          errors.append((name, f"link member (-> {m.linkname})"))
+                          continue
+                      if not m.isfile():
+                          errors.append((name, "not a regular file"))
+                          continue
                       files.append((m.size, name))
+                      if "/" not in name and (name in SDIST_ROOT_FILES or DOC_FILE.match(name)):
+                          continue
                       top = name.split("/")[0]
-                      if "/" not in name and (name in SDIST_ROOT_FILES or name.startswith(SDIST_ROOT_PREFIXES)):
-                          continue
-                      if top.endswith(".egg-info"):
-                          continue
-                      if not in_package(name):
-                          errors.append((name, "outside the package"))
-                      elif (why := check_inside(name)):
-                          errors.append((name, why))
+                      meta = top if top.endswith(".egg-info") and norm(top.removesuffix(".egg-info")) == egg_info else None
+                      classify(name, meta, EGG_INFO_FILES, errors)
               return files, errors
 
 
@@ -192,12 +270,14 @@ jobs:
                     f"{[p.name for p in wheels + sdists]}")
               sys.exit(1)
 
-          if not packages:
+          if packages:
+              print(f"Allowed top-level packages: {packages}")
+          else:
               # Wheel file names carry the normalised distribution name: brainmaze_eeg-2.0.0-py3-...
               packages = sorted({w.name.split("-")[0].lower() for w in wheels})
               print(f"Allowed top-level packages (from the wheel name): {packages}")
 
-          failed = False
+          failed = missing = False
           for art in wheels + sdists:
               files, errors = check_wheel(art) if art.suffix == ".whl" else check_sdist(art)
               size = art.stat().st_size
@@ -206,12 +286,25 @@ jobs:
               for s, n in sorted(files, reverse=True)[:5]:
                   print(f"  {s:>12,d}  {n}")
               for n, why in errors:
-                  print(f"::{level} title=Unwanted file in {art.name}::{n}: {why}")
+                  annotate(level, f"Unwanted file in {art.name}", f"{n}: {why}")
               failed |= bool(errors)
+              for g in required:
+                  hits = sum(glob_match(n, g) for _, n in files)
+                  if hits:
+                      print(f"  required '{g}': {hits} file(s)")
+                  else:
+                      annotate("error", f"Missing required asset in {art.name}",
+                               f"no file matches the required-assets glob '{g}'")
+                      missing = True
 
+          if missing:
+              print("\nA required runtime asset is missing from an artifact (required-assets), so the "
+                    "published package would be broken: add it to [tool.setuptools.package-data].")
           if failed:
-              print("\nRelease artifacts must contain only the package code and required runtime assets "
-                    "(no tests, demos, docs or data). Fix the package discovery / MANIFEST.in, or list a "
-                    "required runtime asset in the allowed-assets input.")
-              sys.exit(1 if mode == "error" else 0)
-          print("\nArtifact contents OK.")
+              print("\nRelease artifacts must contain only the package code (.py/.pyi/py.typed) and the "
+                    "runtime assets listed in allowed-assets/required-assets (no tests, demos, docs or "
+                    "data). Fix the package discovery / MANIFEST.in, or list a needed runtime asset.")
+          if missing or (failed and mode == "error"):
+              sys.exit(1)
+          if not failed:
+              print("\nArtifact contents OK.")
