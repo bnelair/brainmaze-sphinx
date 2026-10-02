@@ -118,6 +118,7 @@ jobs:
           if mode not in ("error", "warn"):
               print(f"::error::dist-check must be 'error', 'warn' or 'off', got '{mode}'")
               sys.exit(1)
+          level = "error" if mode == "error" else "warning"  # GitHub annotation command
           packages = os.environ.get("DIST_PACKAGES", "").split()
           allowed = os.environ.get("ALLOWED_ASSETS", "").split()
           if packages:
@@ -205,7 +206,7 @@ jobs:
               for s, n in sorted(files, reverse=True)[:5]:
                   print(f"  {s:>12,d}  {n}")
               for n, why in errors:
-                  print(f"::{mode} title=Unwanted file in {art.name}::{n}: {why}")
+                  print(f"::{level} title=Unwanted file in {art.name}::{n}: {why}")
               failed |= bool(errors)
 
           if failed:
