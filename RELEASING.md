@@ -154,6 +154,11 @@ The release flow assumes `main` is protected (PR + review). What is configured t
 | brainmaze | **none possible**: private repo on a plan without rulesets | — | — | `main` is unprotected; its release workflow is gated off (see that repo's `RELEASING.md`) |
 | brainmaze-sphinx | **none** | — | — | every caller uses `@main`, so a push here changes every package's CI and release |
 
+No repository has **required status checks** on `main`: a red CI run (including the
+artifact-content job `test / dist-contents / check`) does not block a merge by itself.
+Reviewers must not merge a red PR. The artifact check is a hard gate only at release time
+(`release.yml` fails before `publish`); see [`check-dist.yml`](README.md#check-distyml).
+
 No repository has a `CODEOWNERS` file, so "code owner" review means nothing in practice:
 any collaborator with write access can approve.
 
@@ -203,8 +208,9 @@ requiring `guard` and CI.
       `<pkg>.tests*` if the tests live inside the package), `include-package-data = false`,
       and `[tool.setuptools.package-data]` only for files needed at runtime; a `MANIFEST.in`
       that prunes `tests/`, `demo/`, `docs_src/`, `img/`, `.github/` and data files from the
-      sdist. Pass `dist-check: error` (and `allowed-assets` for required runtime data, e.g.
-      brainmaze-torch's `*.pt` models) to `test.yml` in `ci.yml` and to `release.yml`; see
+      sdist. Pass `dist-check: error` to `test.yml` in `ci.yml` and to `release.yml`; list
+      every runtime data file the package needs in `required-assets` (e.g. brainmaze-torch's
+      two `.pt` models), so the check fails if one drops out of the wheel or sdist; see
       [`check-dist.yml`](README.md#check-distyml).
 
 ### Release-system status (October 2026)
@@ -265,6 +271,22 @@ How it is checked (detection, not a merge gate):
    the issue. The declared bounds today are in [the family table](#the-family).
 4. Code must not use APIs removed in numpy 2 (`np.NaN`, `np.float_`, `np.product`, …).
    The numpy-1 job catches the opposite problem.
+
+## Testing changes to the shared workflows
+
+`test.yml` and `release.yml` call `check-dist.yml@main`, and `release.yml` calls
+`test.yml@main`. These nested references always resolve from `main` of this repo, even
+when a caller pins a tag or SHA (GitHub has no "same ref" for nested cross-repo calls).
+To exercise a change before merging it:
+
+1. Push a temporary branch here (e.g. `tmp/<topic>`) with the nested `@main` refs in
+   `test.yml`/`release.yml` changed to `@tmp/<topic>`.
+2. Push a temporary branch in a caller repo whose `ci.yml` (and, for the release path, a
+   temporary copy of `release.yml` without the publish job, or with a dummy one) calls
+   `@tmp/<topic>`. Bump the version to an unused one (e.g. `9.9.9`) so the guard releases.
+3. Check the runs, then **delete every temporary branch** (here and in the caller).
+
+Because of this, keep every input change backward compatible (new inputs need defaults).
 
 ## Troubleshooting
 

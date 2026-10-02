@@ -33,7 +33,8 @@ jobs:
 | `python-version` | `"3.10"` | Python when `versions` is empty or an entry has no `"python"`. |
 | `package-import-name` | `""` | Prints `<pkg>.__version__` after install. |
 | `dist-check` | `"warn"` | Artifact-content check (job `dist-contents`, see [`check-dist.yml`](#check-distyml)): `"error"` fails the run on an unwanted file, `"warn"` only annotates, `"off"` skips it. |
-| `allowed-assets` | `""` | Whitespace-separated globs of runtime data files the package needs (exempt from the data-file rule), relative to the artifact root, e.g. `brainmaze_torch/seizure_detection/_models/*.pt`. |
+| `allowed-assets` | `""` | Whitespace-separated globs of non-code files the package may ship, relative to the artifact root, e.g. `brainmaze_torch/seizure_detection/_models/*.pt` (see [glob syntax](#check-distyml)). |
+| `required-assets` | `""` | Globs (same syntax) that must each match at least one file in the wheel **and** the sdist; they are allowed too. A missing one fails the check even with `dist-check: warn`. |
 | `dist-packages` | `""` | Top-level packages allowed in the artifacts; empty = the distribution name with `-` → `_`. |
 
 Requirements on the consuming package:
@@ -51,16 +52,38 @@ data stay **out** of the wheel and sdist (see [`check-dist.yml`](#check-distyml)
 Family rule: the wheel **and** the sdist ship only the package code and the runtime
 assets it needs; never tests, demos, docs or data (they are unnecessary size at
 deployment). `check-dist.yml` builds (or downloads) both artifacts, prints their size and
-largest files, and reports every file that is outside the package directory (besides
-`*.dist-info/`, and `PKG-INFO`, `pyproject.toml`, `setup.cfg`, `setup.py`, `MANIFEST.in`,
-`LICENSE*`/`README*` and `*.egg-info/` at the sdist root), inside a `tests/`, `test/`,
-`demo/`, `demos/`, `docs/`, `docs_src/`, `examples/` or `.github/` directory, or a data
-file (`.npz .npy .mat .edf .bdf .csv .tsv .xml .pkl .pickle .h5 .hdf5 .nwb .pt .pth .ckpt
-.onnx .parquet .feather .zip .gz .tar .mef .mefd`) not matched by `allowed-assets`.
+largest files, and checks them against an **allowlist**:
+
+- Inside the package (`dist-packages`, default: the distribution name with `-` → `_`)
+  only `*.py`, `*.pyi` and `py.typed` are allowed, plus files matching `allowed-assets`
+  or `required-assets`. Anything else (`.json`, `.npz`, `.png`, `README.md`, …) is flagged.
+- Never allowed, even inside the package: a `tests/`, `test/`, `demo/`, `demos/`, `docs/`,
+  `docs_src/`, `examples/` or `.github/` directory (any case), and test files
+  (`conftest.py`, `test_*.py`, `*_test.py`).
+- Outside the package only the package's **own** metadata is allowed: in the wheel
+  `<dist>-<ver>.dist-info/` with its known files (`METADATA`, `WHEEL`, `RECORD`,
+  `top_level.txt`, `entry_points.txt`, `licenses/…`); in the sdist `PKG-INFO`,
+  `pyproject.toml`, `setup.cfg`, `setup.py`, `MANIFEST.in`, the exact names
+  `README`/`LICENSE`/`LICENCE`/`COPYING`/`NOTICE` (optionally `.md`/`.rst`/`.txt`), and
+  `<dist>.egg-info/` with its known files. Wheel `.data/` directories, foreign
+  `*.dist-info`/`*.egg-info` and files like `requirements.txt` or `CHANGELOG.md` are flagged.
+- sdist members that are symlinks, hardlinks or not regular files, and member names that
+  are absolute or contain `..`, are flagged.
+- Every `required-assets` glob must match at least one file in **each** artifact (wheel
+  and sdist). This catches a runtime asset (e.g. brainmaze-torch's trained models) that
+  silently dropped out of the wheel, which the tests cannot notice because they import
+  the package from the source tree. A missing required asset **always fails** (also in
+  `warn` mode): it means the published package would be broken.
+
+Glob syntax (`allowed-assets`, `required-assets`): paths relative to the artifact root,
+matched **per path segment**. `*`, `?` and `[…]` never cross `/`
+(`pkg/_models/*.pt` does not match `pkg/_models/sub/x.pt`); a segment `**` matches zero
+or more directories (`pkg/assets/**/*.json`). Matching is case-sensitive.
 
 It runs automatically: `test.yml` checks a fresh build on every push/PR (job
-`dist-contents`), and `release.yml` checks the exact `dist` artifact before the caller's
-`publish` job may run. Callers set the inputs on both:
+`dist-contents`, built with the same `python-version` as the release build), and
+`release.yml` checks the exact `dist` artifact before the caller's `publish` job may run.
+Callers set the inputs on both:
 
 ```yaml
 # ci.yml
@@ -68,20 +91,43 @@ It runs automatically: `test.yml` checks a fresh build on every push/PR (job
     with:
       package-import-name: brainmaze_torch
       dist-check: error
-      allowed-assets: brainmaze_torch/seizure_detection/_models/*.pt   # only if needed
-# release.yml (the `build` job)
+      # only if the package needs non-code files at runtime (here: the trained models)
+      required-assets: >-
+        brainmaze_torch/seizure_detection/_models/modelA_paper.pt
+        brainmaze_torch/seizure_detection/_models/modelB_full.pt
+# release.yml (the `build` job): the same inputs
     uses: bnelair/brainmaze-sphinx/.github/workflows/release.yml@main
     with:
       dist-check: error
-      allowed-assets: brainmaze_torch/seizure_detection/_models/*.pt
+      required-assets: >-
+        brainmaze_torch/seizure_detection/_models/modelA_paper.pt
+        brainmaze_torch/seizure_detection/_models/modelB_full.pt
 ```
 
 The default `"warn"` keeps callers that have not cleaned up their packaging green (the
-offending files show as warnings); every family package should set `dist-check: error`.
+offending files show as warnings); every family package should set `dist-check: error`,
+and the default will become `"error"` once all of them do.
 To keep artifacts clean, restrict setuptools discovery to the package
 (`include = ["<pkg>", "<pkg>.*"]`, exclude `<pkg>.tests*`), set
 `include-package-data = false` with an explicit `[tool.setuptools.package-data]` for
-required assets, and `prune` everything else from the sdist in `MANIFEST.in`.
+required assets (and list them in `required-assets`), and `prune` everything else from
+the sdist in `MANIFEST.in`.
+
+**Where the check is enforced.** No family repository has required status checks on
+`main` (the rulesets only require one approving review). So a failing `dist-contents`
+job on a PR is visible but does **not** block the merge: reviewers must not merge a PR
+whose `dist-contents` check is red. The hard gate is the release: with
+`dist-check: error` (or a missing required asset) `release.yml` fails before the caller's
+`publish` job, so nothing reaches PyPI. Making `test / dist-contents / check` a required
+status check in a repo's ruleset is an optional, per-repo maintainer decision.
+
+**Nested workflows always resolve from `main`.** `test.yml` and `release.yml` call
+`check-dist.yml@main` (and `release.yml` calls `test.yml@main`). GitHub has no "same ref"
+for nested reusable workflows across repositories, so a caller that pins this repo to a
+tag or SHA still gets the nested workflows from `main`. Consequences: (a) keep the
+inputs of `check-dist.yml` backward compatible (new inputs need defaults); (b) a change to
+these workflows can only be exercised before merge on a temporary branch whose nested
+`@main` refs point at that branch (see [RELEASING.md](RELEASING.md#testing-changes-to-the-shared-workflows)).
 
 ### Release workflows (`prepare-release.yml` + `release.yml`)
 
@@ -124,7 +170,7 @@ Shared-workflow inputs:
 | `prepare-release.yml` | `bump` (required) | `patch` / `minor` / `major` |
 | `release.yml` | `versions` | forwarded to `test.yml` |
 | `release.yml` | `python-version` | forwarded to `test.yml` **and** the interpreter used to build the distributions |
-| `release.yml` | `dist-check`, `allowed-assets`, `dist-packages` | artifact-content check of the built `dist` artifact (see [`check-dist.yml`](#check-distyml)); with `dist-check: error` a violation blocks the publish |
+| `release.yml` | `dist-check`, `allowed-assets`, `required-assets`, `dist-packages` | artifact-content check of the built `dist` artifact (see [`check-dist.yml`](#check-distyml)); with `dist-check: error` a violation blocks the publish |
 | `release.yml` | `bump` | **deprecated, ignored**. Only the input is tolerated: old callers that also pass `pypi-auth` or `secrets: PYPI_Token_General` (no longer declared) fail validation, and the shared workflow no longer publishes. Such callers must migrate to the caller set below. |
 | `release.yml` outputs | `released`, `version` | `'true'` when an untagged version was built |
 
