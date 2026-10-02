@@ -74,6 +74,12 @@ largest files, and checks them against an **allowlist**:
   silently dropped out of the wheel, which the tests cannot notice because they import
   the package from the source tree. A missing required asset **always fails** (also in
   `warn` mode): it means the published package would be broken.
+  A file that is itself flagged (e.g. in a `tests/` directory or with a control character
+  in its name) does not count as the required asset.
+- Files admitted by `allowed-assets`/`required-assets` are listed per artifact in the log
+  (first 20), so an over-broad glob is visible; a glob whose last segment is only wildcards
+  (`**`, `*`, `pkg/**`, `pkg/*`) raises a warning. File names are escaped everywhere they
+  are printed, and a name containing a control character (e.g. a newline) is flagged.
 
 Glob syntax (`allowed-assets`, `required-assets`): paths relative to the artifact root,
 matched **per path segment**. `*`, `?` and `[…]` never cross `/`

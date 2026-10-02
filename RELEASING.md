@@ -207,8 +207,10 @@ requiring `guard` and CI.
       `[tool.setuptools.packages.find] include = ["<pkg>", "<pkg>.*"]` (exclude
       `<pkg>.tests*` if the tests live inside the package), `include-package-data = false`,
       and `[tool.setuptools.package-data]` only for files needed at runtime; a `MANIFEST.in`
-      that prunes `tests/`, `demo/`, `docs_src/`, `img/`, `.github/` and data files from the
-      sdist. Pass `dist-check: error` to `test.yml` in `ci.yml` and to `release.yml`; list
+      that does not pull data files into the sdist (`include-package-data = false` keeps
+      setuptools from adding files via git/MANIFEST; prune `tests/`, `demo/`, `docs_src/`,
+      `img/`, `.github/` only where the repository has such directories, since a `prune` of
+      a missing directory is a no-op). Pass `dist-check: error` to `test.yml` in `ci.yml` and to `release.yml`; list
       every runtime data file the package needs in `required-assets` (e.g. brainmaze-torch's
       two `.pt` models), so the check fails if one drops out of the wheel or sdist; see
       [`check-dist.yml`](README.md#check-distyml).

@@ -147,6 +147,16 @@ jobs:
           print(f"Required asset globs: {required or '(none)'}")
 
 
+          CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+
+
+          def safe(name):
+              """Printable form of a file name: control characters (incl. newlines) are shown escaped,
+              so that a hostile name can never inject workflow commands or fake log lines."""
+              return CONTROL.sub(lambda m: "\\x%02x" % ord(m.group()) if ord(m.group()) < 256
+                                 else "\\u%04x" % ord(m.group()), name)
+
+
           def esc_data(s):
               return s.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
@@ -156,7 +166,14 @@ jobs:
 
 
           def annotate(lvl, title, msg):
-              print(f"::{lvl} title={esc_prop(title)}::{esc_data(msg)}")
+              print(f"::{lvl} title={esc_prop(safe(title))}::{esc_data(safe(msg))}")
+
+
+          for g in allowed:
+              last = g.strip("/").split("/")[-1]
+              if not last.strip("*?"):
+                  print(f"::warning title=Over-broad allowed-assets glob::'{safe(g)}' admits every file "
+                        f"in its directory (any type); use a specific pattern such as 'pkg/data/*.json'")
 
 
           def seg_match(segs, pats):
@@ -204,7 +221,9 @@ jobs:
           def classify(name, meta_dir, meta_files, errors):
               """Rules for a file name relative to the artifact root (wheel root or sdist root dir)."""
               top, _, rest = name.partition("/")
-              if meta_dir and top == meta_dir and rest:
+              if CONTROL.search(name):
+                  errors.append((name, "control character (e.g. newline) in the file name"))
+              elif meta_dir and top == meta_dir and rest:
                   if not (rest in meta_files or DOC_FILE.match(rest)
                           or (rest.startswith("licenses/") and DOC_FILE.match(rest.rsplit("/", 1)[-1]))):
                       errors.append((name, f"unexpected file in {meta_dir}/"))
@@ -284,12 +303,19 @@ jobs:
               total = sum(s for s, _ in files)
               print(f"\n{art.name}: {size / 1e6:.3f} MB compressed, {total / 1e6:.3f} MB in {len(files)} files")
               for s, n in sorted(files, reverse=True)[:5]:
-                  print(f"  {s:>12,d}  {n}")
+                  print(f"  {s:>12,d}  {safe(n)}")
+              flagged = {n for n, _ in errors}
+              admitted = sorted(n for _, n in files if n not in flagged and any(glob_match(n, g) for g in allowed))
+              print(f"  admitted by allowed/required-assets: {len(admitted)} file(s)")
+              for n in admitted[:20]:
+                  print(f"    {safe(n)}")
+              if len(admitted) > 20:
+                  print(f"    ... and {len(admitted) - 20} more")
               for n, why in errors:
                   annotate(level, f"Unwanted file in {art.name}", f"{n}: {why}")
               failed |= bool(errors)
               for g in required:
-                  hits = sum(glob_match(n, g) for _, n in files)
+                  hits = sum(glob_match(n, g) for _, n in files if n not in flagged)
                   if hits:
                       print(f"  required '{g}': {hits} file(s)")
                   else:
