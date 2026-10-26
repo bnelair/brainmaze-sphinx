@@ -183,7 +183,10 @@ Package-repo callers (copy these verbatim from
 `prepare-release.yml`, `release.yml`, `version-guard.yml`. A repo that publishes with the
 organisation token takes its `release.yml` from
 [brainmaze-eeg-models](https://github.com/bnelair/brainmaze-eeg-models/tree/main/.github/workflows)
-instead (see [How each package publishes](RELEASING.md#how-each-package-publishes)).
+(or brainmaze-zmq for the minimal form) instead, and **adapts** it rather than copying it
+verbatim: the `versions` matrix, the asset globs and the `0.0.0` placeholder guard in
+`publish` are specific to eeg-models (see
+[How each package publishes](RELEASING.md#how-each-package-publishes)).
 
 Shared-workflow inputs:
 
