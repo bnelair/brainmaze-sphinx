@@ -11,16 +11,28 @@ link for everyone outside the organisation.)
 
 ## The family
 
-Runtime dependencies as declared in each package's `pyproject.toml` on `main`
-(October 2026):
+Runtime dependencies as declared in each package's `pyproject.toml` on `main`, and the
+latest release on PyPI (checked 2026-10-26):
 
-| PyPI / repo | import name | runtime dependencies | docs |
-|---|---|---|---|
-| [`brainmaze-utils`](https://github.com/bnelair/brainmaze-utils) | `brainmaze_utils` | numpy, scipy, pandas, pytz, python-dateutil (no lower bounds) | <https://bnelair.github.io/brainmaze-utils/> |
-| [`brainmaze-eeg`](https://github.com/bnelair/brainmaze-eeg) | `brainmaze_eeg` | brainmaze-utils>=1.0.4, numpy>=1.20.0, pandas>=2.2.0, scikit-learn>=1.6.1, scipy, pytz, python-dateutil, tqdm, setuptools>=61 | <https://bnelair.github.io/brainmaze-eeg/> |
-| [`brainmaze-torch`](https://github.com/bnelair/brainmaze-torch) | `brainmaze_torch` | numpy>=1.24, scipy>=1.10, torch>=2.3 (from bnelair/brainmaze-torch#9; v0.1.1 also pulled in brainmaze-utils, torchvision, torchaudio, pandas, scikit-learn, matplotlib, pyyaml, tqdm, pytz, python-dateutil, setuptools, sphinx, sphinx_book_theme) | <https://bnelair.github.io/brainmaze-torch/> |
-| [`brainmaze-zmq`](https://github.com/bnelair/brainmaze-zmq) | `brainmaze_zmq` | pyzmq, pythonping, tornado>=6.5 | <https://bnelair.github.io/brainmaze-zmq/> |
-| [`brainmaze`](https://github.com/bnelair/brainmaze) (private repo) | `brainmaze` | the four packages above, unpinned (meta-package) | — |
+| PyPI / repo | import name | latest release | runtime dependencies | docs |
+|---|---|---|---|---|
+| [`brainmaze-utils`](https://github.com/bnelair/brainmaze-utils) | `brainmaze_utils` | 3.0.0 | numpy>=1.24, scipy>=1.10, pandas>=2.0, python-dateutil, tqdm | <https://bnelair.github.io/brainmaze-utils/> |
+| [`brainmaze-eeg`](https://github.com/bnelair/brainmaze-eeg) | `brainmaze_eeg` | 3.1.0 | brainmaze_utils>=3.0.0, numpy>=1.24, pandas>=2.2.0, pytz, python-dateutil, scikit-learn>=1.6.1, scipy>=1.10, tqdm. Optional extra `models` = brainmaze-eeg-models>=0.1.0 (on `main`, not yet in a release) | <https://bnelair.github.io/brainmaze-eeg/> |
+| [`brainmaze-eeg-models`](https://github.com/bnelair/brainmaze-eeg-models) | `brainmaze_eeg_models` | 0.1.0 | numpy>=1.24, scipy>=1.10, onnxruntime>=1.19, brainmaze-utils>=3.0.0. Ships the trained models as `.onnx` files; no PyTorch (only its optional `export` extra, used to regenerate the ONNX files, needs torch, onnx and brainmaze-torch==0.2.0) | <https://bnelair.github.io/brainmaze-eeg-models/> |
+| [`brainmaze-zmq`](https://github.com/bnelair/brainmaze-zmq) | `brainmaze_zmq` | 0.0.1 (old flow) | pyzmq, pythonping, tornado>=6.5 | <https://bnelair.github.io/brainmaze-zmq/> |
+| [`brainmaze`](https://github.com/bnelair/brainmaze) (private repo) | `brainmaze` | never released from the repo (PyPI has only `0.0.0a0`) | the family packages, unpinned (meta-package); see below | — |
+| [`brainmaze-torch`](https://github.com/bnelair/brainmaze-torch) | `brainmaze_torch` | **0.3.0, final. Retired; repo archived.** | brainmaze-eeg-models>=0.1.0 only: 0.3.0 is a compatibility shim over brainmaze-eeg-models (same API, no PyTorch). Use brainmaze-eeg-models instead. | <https://bnelair.github.io/brainmaze-torch/> (frozen) |
+
+The meta-package on `main` still depends on brainmaze-utils, brainmaze-eeg, brainmaze-torch
+and brainmaze-zmq. bnelair/brainmaze#4 (open; private repo)
+replaces brainmaze-torch with brainmaze-eeg-models there; brainmaze-torch then stays only in
+the meta repo's compatibility test matrix, where the 0.3.0 shim's test suite checks
+brainmaze-eeg-models' API, because the archived repo cannot run its own CI any more.
+
+History (brainmaze-torch): 0.2.0 depended on numpy>=1.24, scipy>=1.10 and torch>=2.3;
+0.1.1 also pulled in brainmaze-utils, torchvision, torchaudio, pandas, scikit-learn,
+matplotlib, pyyaml, tqdm, pytz, python-dateutil, setuptools, sphinx and sphinx_book_theme.
+Its models were exported to ONNX and continue in brainmaze-eeg-models.
 
 Shared CI and release logic lives in this repo
 ([`bnelair/brainmaze-sphinx`](https://github.com/bnelair/brainmaze-sphinx)) as reusable
@@ -83,7 +95,8 @@ Key properties:
 | package | PyPI authentication |
 |---|---|
 | brainmaze-utils, brainmaze-eeg, brainmaze (meta; publishing disabled for now) | **Trusted Publishing** (OIDC): PyPI publisher = owner `bnelair`, repo `<repo>`, workflow `release.yml`, no environment. The `publish` job has `id-token: write`. |
-| brainmaze-zmq, brainmaze-torch | **API token**, the organisation secret `PYPI_Token_General` (maintainer decision), passed to `pypa/gh-action-pypi-publish` as `password:` in the `publish` job, which first fails loudly if the secret is empty or not shared with the repo. No `id-token: write`. Everything else is the same flow. |
+| brainmaze-zmq, brainmaze-eeg-models | **API token**, the organisation secret `PYPI_Token_General` (maintainer decision), passed to `pypa/gh-action-pypi-publish` as `password:` in the `publish` job, which first fails loudly if the secret is empty or not shared with the repo. No `id-token: write`. Everything else is the same flow. brainmaze-eeg-models' first upload (0.1.0, run [37357090471](https://github.com/bnelair/brainmaze-eeg-models/actions/runs/37357090471)) created the PyPI project with this token. |
+| brainmaze-torch (archived) | History: published 0.2.0 and the final 0.3.0 with the organisation token, as above. The archived repo cannot run workflows. |
 
 ## Cutting a release (step by step)
 
@@ -132,27 +145,39 @@ Find the failed *Release* run for the bump commit and go by the step that failed
 Release in dependency order and bump the lower bound in the dependents:
 
 1. `brainmaze-utils`
-2. `brainmaze-eeg` (depends on brainmaze-utils): in a normal PR, raise `brainmaze_utils>=X.Y`
-   in `dependencies` if it needs the new release, merge, then release. `brainmaze-torch` (from
-   bnelair/brainmaze-torch#9) and `brainmaze-zmq` don't depend on brainmaze-utils and can be
-   released any time.
+2. `brainmaze-eeg` and `brainmaze-eeg-models` (both depend on `brainmaze-utils>=3.0.0`): in a
+   normal PR, raise the brainmaze-utils lower bound in `dependencies` if the package needs the
+   new release, merge, then release. Their required dependencies don't include each other,
+   so their order doesn't matter, with one exception: brainmaze-eeg's optional `models`
+   extra requires brainmaze-eeg-models (>=0.1.0 today); if brainmaze-eeg needs a newer one,
+   release brainmaze-eeg-models first. `brainmaze-zmq` doesn't depend on brainmaze-utils
+   and can be released any time.
 3. `brainmaze`, the meta-package: raise lower bounds if needed, then release.
+
+brainmaze-torch is retired (0.3.0 final, repo archived) and is never released again. Its
+0.3.0 shim requires `brainmaze-eeg-models>=0.1.0` with no upper bound, so a breaking
+brainmaze-eeg-models release can break installed brainmaze-torch 0.3.0; the meta repo's
+compatibility run (see [Compatibility policy](#compatibility-policy)) catches that.
 
 A dependent PR that needs an unreleased utils feature will fail CI until utils is on PyPI,
 because CI installs dependencies from PyPI. Merge and release utils first.
 
 ## Branch protection and review
 
-The release flow assumes `main` is protected (PR + review). What is configured today:
+The release flow assumes `main` is protected (PR + review). What is configured today
+(queried with `gh api repos/bnelair/<repo>/rulesets` on 2026-10-26): every ruleset is
+active, blocks deletion and force-push, and lets org admins and the repo admin role bypass
+it. No public repo uses classic branch protection.
 
 | repo | ruleset on `main` | approvals | merge methods | notes |
 |---|---|---|---|---|
-| brainmaze-utils | 4278916 (`main`) | 1 | squash | also requires code-owner review, which has **no effect**: there is no CODEOWNERS file. Org/repo admins bypass. |
-| brainmaze-eeg | 4286093 (`main` + `dev`) | 1 | squash | admins bypass |
-| brainmaze-torch | 4896155 (`main` + `dev`) | 1 | squash | admins bypass |
-| brainmaze-zmq | 2715191 (default branch) | 1 | squash | admins bypass (tightened from 0 approvals / all merge methods in October 2026) |
-| brainmaze | **none possible**: private repo on a plan without rulesets | — | — | `main` is unprotected; its release workflow is gated off (see that repo's `RELEASING.md`) |
-| brainmaze-sphinx | **none** | — | — | every caller uses `@main`, so a push here changes every package's CI and release |
+| brainmaze-utils | 4278916 (`main`) | 1 | squash | also requires code-owner review, which has **no effect**: there is no CODEOWNERS file |
+| brainmaze-eeg | 4286093 (`main` + `dev`) | 1 | squash | |
+| brainmaze-eeg-models | 24383099 (default branch) | 1 | squash | |
+| brainmaze-zmq | 2715191 (default branch) | 1 | squash | also requests a Copilot code review (not on every push, not on drafts). Tightened from 0 approvals / all merge methods in October 2026. |
+| brainmaze-sphinx | 24320645 (default branch) | 1 | squash | added October 2026. Every caller uses `@main`, so a merge here changes every package's CI and release. |
+| brainmaze | **none possible**: private repo on a plan without rulesets (the API answers 403) | — | — | `main` is unprotected; its release workflow is gated off (see that repo's `RELEASING.md`) |
+| brainmaze-torch (archived) | 4896155 (`main` + `dev`) | 1 | squash | still configured, but moot: an archived repo is read-only |
 
 No repository has **required status checks** on `main`: a red CI run (including the
 artifact-content job `test / dist-contents / check`) does not block a merge by itself.
@@ -185,7 +210,11 @@ requiring `guard` and CI.
 - [ ] Caller workflows in `.github/workflows/`, copied from
       [brainmaze-eeg](https://github.com/bnelair/brainmaze-eeg/tree/main/.github/workflows):
       `ci.yml`, `docs.yml`, `prepare-release.yml`, `release.yml`, `version-guard.yml`
-      (change only `package-import-name` in `ci.yml`).
+      (change only `package-import-name` in `ci.yml`, plus the asset and `versions`
+      inputs where needed). A repo that publishes with the organisation token copies
+      `release.yml` from
+      [brainmaze-eeg-models](https://github.com/bnelair/brainmaze-eeg-models/tree/main/.github/workflows)
+      instead.
 - [ ] **PyPI publishing**, one of (see [How each package publishes](#how-each-package-publishes)):
       Trusted Publishing: on pypi.org → project → *Publishing* → add a GitHub publisher:
       owner `bnelair`, repository `<repo>`, workflow `release.yml`, no environment (for a
@@ -211,19 +240,23 @@ requiring `guard` and CI.
       setuptools from adding files via git/MANIFEST; prune `tests/`, `demo/`, `docs_src/`,
       `img/`, `.github/` only where the repository has such directories, since a `prune` of
       a missing directory is a no-op). Pass `dist-check: error` to `test.yml` in `ci.yml` and to `release.yml`; list
-      every runtime data file the package needs in `required-assets` (e.g. brainmaze-torch's
-      two `.pt` models), so the check fails if one drops out of the wheel or sdist; see
+      every runtime data file the package needs in `required-assets` (e.g. brainmaze-eeg-models'
+      four `.onnx` models), so the check fails if one drops out of the wheel or sdist; see
       [`check-dist.yml`](README.md#check-distyml).
 
-### Release-system status (October 2026)
+### Release-system status (2026-10-26)
 
-| repo | release system | notes |
+| repo | release system | latest release |
 |---|---|---|
-| brainmaze-utils | current (PR-based, Trusted Publishing) | v2.0.0 (tagged at #25, see recovery above) |
-| brainmaze-eeg | current | v1.0.0 |
-| brainmaze-torch | migration PR open (bnelair/brainmaze-torch#9), org token | old `release.yml` called removed inputs and could not publish |
-| brainmaze-zmq | migration PR open (bnelair/brainmaze-zmq#15), org token | v0.0.1 (old flow) |
-| brainmaze (meta, private repo) | migration PR open (bnelair/brainmaze#2), release gated off | never released from that repo; PyPI has only `0.0.0a0` |
+| brainmaze-utils | current (PR-based, Trusted Publishing) | v3.0.0 |
+| brainmaze-eeg | current (Trusted Publishing) | v3.1.0 |
+| brainmaze-eeg-models | current (org token), since its first release | v0.1.0 |
+| brainmaze-zmq | current (org token), since bnelair/brainmaze-zmq#15 | v0.0.1, from the old flow; nothing released since the migration |
+| brainmaze (meta, private repo) | current since bnelair/brainmaze#2, release gated off while private | never released from that repo; PyPI has only `0.0.0a0` |
+| brainmaze-torch | **retired, archived**; was on the current flow (org token) since bnelair/brainmaze-torch#9 | v0.3.0, final |
+
+History: before migrating, brainmaze-torch's old `release.yml` called removed inputs and
+could not publish; brainmaze-utils v2.0.0 was tagged at #25 (see the recovery section above).
 
 ## Contributor rules
 
@@ -253,12 +286,15 @@ How it is checked (detection, not a merge gate):
    versions: '[{"python": "3.10", "numpy": "<2"}, {"python": "3.12", "numpy": ">=2"}]'
    ```
    (numpy<2 has no wheels for Python >= 3.13; keep the old stack on <= 3.12.)
-   **Pending migration:** no package's `ci.yml` passes `versions` yet. Callers can only add
-   it after the `versions` input is on brainmaze-sphinx `main` (an undeclared input fails
-   the caller). Until then each package is tested on Python 3.10 with the latest numpy only.
+   **Partly migrated:** brainmaze-eeg-models passes this matrix in `ci.yml` and
+   `release.yml`. brainmaze-utils, brainmaze-eeg, brainmaze-zmq and the meta-package don't
+   pass `versions` yet, so each is tested per package on Python 3.10 with the latest numpy
+   only (the cross-package run below still covers numpy 1.x).
 2. **Across packages**: the *Compatibility* workflow (`compat.yml`) in the `brainmaze`
    meta-package repo (private) installs all packages **and the meta-package itself**
-   together in one environment, from PyPI (latest releases) and from `main` (what will be
+   together in one environment (on its `main`: brainmaze-utils, -eeg, -torch and -zmq; with
+   the open bnelair/brainmaze#4: brainmaze-utils, -eeg, -eeg-models, the brainmaze-torch
+   0.3.0 shim and -zmq), from PyPI (latest releases) and from `main` (what will be
    released next), on Python 3.10 + numpy<2, 3.11, and 3.12 + numpy>=2. A further job
    installs `main` at the **lowest versions allowed by the declared lower bounds**
    (`uv --resolution lowest-direct`, wheels only). Each job runs `pip check`, imports
@@ -298,7 +334,10 @@ Because of this, keep every input change backward compatible (new inputs need de
 | *Prepare release* fails creating the PR | Enable *Allow GitHub Actions to create and approve pull requests*. |
 | Release run failed part-way | See [Recovering from a failed release](#recovering-from-a-failed-release). |
 | Release run: publish fails with `invalid-publisher` | The Trusted Publisher on PyPI doesn't match: it must be repo `bnelair/<repo>`, workflow `release.yml`, no environment. Fix it on PyPI, then re-run the failed job (nothing was tagged). |
-| Release run: "Secret PYPI_Token_General is empty or not available" (zmq, torch) | The organisation secret is missing or not shared with this repo. Fix it in the org settings, then re-run the failed job (nothing was published or tagged). |
+| Release run: "Secret PYPI_Token_General is empty or not available" (zmq, eeg-models) | The organisation secret is missing or not shared with this repo. Fix it in the org settings, then re-run the failed job (nothing was published or tagged). |
+| Release run: the first upload of a **new** PyPI project fails with 403 (token publishing) | The organisation token is scoped to existing projects only. Widen its scope, or add a PyPI pending trusted publisher; see "First release" in [brainmaze-eeg-models' RELEASING.md](https://github.com/bnelair/brainmaze-eeg-models/blob/main/RELEASING.md). (brainmaze-eeg-models 0.1.0 was created with the token without this problem.) |
+| Something still needs brainmaze-torch's CI, issues or a new release | The repo is archived (read-only). Its final 0.3.0 is a shim over brainmaze-eeg-models: fix the problem in brainmaze-eeg-models, and move code to `brainmaze_eeg_models`. |
+| *Compatibility* (meta repo) fails with `PackageNotFoundError: ... torch` | brainmaze-torch 0.3.0 no longer pulls in PyTorch, but the workflow on the meta repo's `main` still prints `torch`'s version. Fixed by bnelair/brainmaze#4 (open). |
 | Release run: guard fails "[project].version ... is not X.Y.Z" | `pyproject.toml` has no static `[project].version` of the form `X.Y.Z`. Fix it in a reviewed PR. |
 | Release run did nothing after merging the bump | Tag `vX.Y.Z` already exists (version not actually bumped), or the guard's `git ls-remote` failed. Check the *guard* job log. |
 | A normal PR fails *Version guard* | It changes `[project].version`. Revert that line. |

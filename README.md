@@ -33,7 +33,7 @@ jobs:
 | `python-version` | `"3.10"` | Python when `versions` is empty or an entry has no `"python"`. |
 | `package-import-name` | `""` | Prints `<pkg>.__version__` after install. |
 | `dist-check` | `"warn"` | Artifact-content check (job `dist-contents`, see [`check-dist.yml`](#check-distyml)): `"error"` fails the run on an unwanted file, `"warn"` only annotates, `"off"` skips it. |
-| `allowed-assets` | `""` | Whitespace-separated globs of non-code files the package may ship, relative to the artifact root, e.g. `brainmaze_torch/seizure_detection/_models/*.pt` (see [glob syntax](#check-distyml)). |
+| `allowed-assets` | `""` | Whitespace-separated globs of non-code files the package may ship, relative to the artifact root, e.g. `brainmaze_eeg_models/*/_models/*.onnx` (see [glob syntax](#check-distyml)). |
 | `required-assets` | `""` | Globs (same syntax) that must each match at least one file in the wheel **and** the sdist; they are allowed too. A missing one fails the check even with `dist-check: warn`. |
 | `dist-packages` | `""` | Top-level packages allowed in the artifacts; empty = the distribution name with `-` → `_`. |
 
@@ -70,7 +70,7 @@ largest files, and checks them against an **allowlist**:
 - sdist members that are symlinks, hardlinks or not regular files, and member names that
   are absolute or contain `..`, are flagged.
 - Every `required-assets` glob must match at least one file in **each** artifact (wheel
-  and sdist). This catches a runtime asset (e.g. brainmaze-torch's trained models) that
+  and sdist). This catches a runtime asset (e.g. brainmaze-eeg-models' trained ONNX models) that
   silently dropped out of the wheel, which the tests cannot notice because they import
   the package from the source tree. A missing required asset **always fails** (also in
   `warn` mode): it means the published package would be broken.
@@ -92,23 +92,36 @@ It runs automatically: `test.yml` checks a fresh build on every push/PR (job
 Callers set the inputs on both:
 
 ```yaml
-# ci.yml
+# ci.yml (brainmaze-eeg-models)
     uses: bnelair/brainmaze-sphinx/.github/workflows/test.yml@main
     with:
-      package-import-name: brainmaze_torch
+      package-import-name: brainmaze_eeg_models
       dist-check: error
-      # only if the package needs non-code files at runtime (here: the trained models)
+      # only if the package needs non-code files at runtime (here: the trained ONNX models)
+      allowed-assets: brainmaze_eeg_models/*/_models/*.onnx
       required-assets: >-
-        brainmaze_torch/seizure_detection/_models/modelA_paper.pt
-        brainmaze_torch/seizure_detection/_models/modelB_full.pt
+        brainmaze_eeg_models/spindles/_models/spindle-detector-eeg.onnx
+        brainmaze_eeg_models/spindles/_models/spindle-detector-ieeg.onnx
+        brainmaze_eeg_models/seizure/_models/modelA_paper.onnx
+        brainmaze_eeg_models/seizure/_models/modelB_full.onnx
 # release.yml (the `build` job): the same inputs
     uses: bnelair/brainmaze-sphinx/.github/workflows/release.yml@main
     with:
       dist-check: error
+      allowed-assets: brainmaze_eeg_models/*/_models/*.onnx
       required-assets: >-
-        brainmaze_torch/seizure_detection/_models/modelA_paper.pt
-        brainmaze_torch/seizure_detection/_models/modelB_full.pt
+        brainmaze_eeg_models/spindles/_models/spindle-detector-eeg.onnx
+        brainmaze_eeg_models/spindles/_models/spindle-detector-ieeg.onnx
+        brainmaze_eeg_models/seizure/_models/modelA_paper.onnx
+        brainmaze_eeg_models/seizure/_models/modelB_full.onnx
 ```
+
+This is brainmaze-eeg-models' actual configuration (abridged; its `ci.yml` and
+`release.yml` also pass the family `versions` matrix). `allowed-assets` admits any
+`.onnx` model in a `_models/` directory one level below the package, so a new model does
+not fail the check before it is listed; `required-assets` names each model that must ship.
+(History: brainmaze-torch listed its two `.pt` models the same way before it was retired;
+its final release 0.3.0 ships Python code only, and the repo is archived.)
 
 The default `"warn"` keeps callers that have not cleaned up their packaging green (the
 offending files show as warnings); every family package should set `dist-check: error`,
@@ -120,9 +133,9 @@ required assets (and list them in `required-assets`), and `prune` everything els
 the sdist in `MANIFEST.in`.
 
 **Where the check is enforced.** No family repository has required status checks on
-`main` (the rulesets only require one approving review). So a failing `dist-contents`
-job on a PR is visible but does **not** block the merge: reviewers must not merge a PR
-whose `dist-contents` check is red. The hard gate is the release: with
+`main` (the rulesets require a pull request with one approving review, nothing more from
+CI). So a failing `dist-contents` job on a PR is visible but does **not** block the
+merge: reviewers must not merge a PR whose `dist-contents` check is red. The hard gate is the release: with
 `dist-check: error` (or a missing required asset) `release.yml` fails before the caller's
 `publish` job, so nothing reaches PyPI. Making `test / dist-contents / check` a required
 status check in a repo's ruleset is an optional, per-repo maintainer decision.
@@ -153,7 +166,7 @@ In short:
      matrix if passed), builds sdist + wheel and uploads them as the `dist` artifact;
    - the package repo's own **top-level** `publish` job downloads `dist`, publishes to
      PyPI with **Trusted Publishing** (OIDC; must be top-level, a reusable workflow
-     cannot publish) or, in brainmaze-zmq and brainmaze-torch, the organisation API token
+     cannot publish) or, in brainmaze-zmq and brainmaze-eeg-models, the organisation API token
      `PYPI_Token_General`, and only then pushes tag `vX.Y.Z` and creates the GitHub Release
      with generated notes. The caller's jobs are least-privilege (only `publish` gets
      `contents: write`, plus `id-token: write` for Trusted Publishing) and serialised per
@@ -167,7 +180,10 @@ In short:
 
 Package-repo callers (copy these verbatim from
 [brainmaze-eeg](https://github.com/bnelair/brainmaze-eeg/tree/main/.github/workflows)):
-`prepare-release.yml`, `release.yml`, `version-guard.yml`.
+`prepare-release.yml`, `release.yml`, `version-guard.yml`. A repo that publishes with the
+organisation token takes its `release.yml` from
+[brainmaze-eeg-models](https://github.com/bnelair/brainmaze-eeg-models/tree/main/.github/workflows)
+instead (see [How each package publishes](RELEASING.md#how-each-package-publishes)).
 
 Shared-workflow inputs:
 
